@@ -89,10 +89,13 @@ const agreementSchema = new mongoose.Schema({
   certifyAccuracy: Boolean,
 }, { _id: false });
 
+// fileId points at the GridFS file living in the applicationDocs bucket —
+// fetch its bytes back via GET /api/applications/documents/:fileId.
+// (No more `path`: there's no local disk file anymore, the bytes live in Atlas.)
 const documentSchema = new mongoose.Schema({
   docType: { type: String, required: true },
+  fileId: { type: mongoose.Schema.Types.ObjectId, required: true },
   filename: String,
-  path: String,
   mimetype: String,
   size: Number,
   uploadedAt: { type: Date, default: Date.now },
