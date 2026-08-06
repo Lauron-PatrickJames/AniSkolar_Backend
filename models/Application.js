@@ -1,147 +1,47 @@
 const mongoose = require('mongoose');
 
-// --- Sub-schemas mirroring your SfagPersonalInfo, SfagContactSchool, etc. ---
-
-const personalInfoSchema = new mongoose.Schema({
-  lastName: String,
-  firstName: String,
-  middleInitial: String,
-  suffix: String,
-  studentNumber: String,
-  course: String,
-  yearLevel: String,
-  placeOfBirth: String,
-  dateOfBirth: String,
-  age: String,
-  civilStatus: String,
-  gender: String,
-  nationality: String,
-  isPwd: Boolean,
-  religion: String,
-  specifyReligion: String,
-}, { _id: false });
-
-const contactSchoolSchema = new mongoose.Schema({
-  streetAddress: String,
-  municipality: String,
-  province: String,
-  country: String,
-  mobileNo: String,
-  landlineNo: String,
-  email: String,
-  secondarySchool: String,
-  schoolAddress: String,
-  schoolType: String,
-}, { _id: false });
-
-const parentInfoSchema = new mongoose.Schema({
-  fullName: String,
-  occupation: String,
-  company: String,
-  companyTel: String,
-  monthlyIncome: String,
-  isSoloParent: Boolean,
-}, { _id: false });
-
-const guardianInfoSchema = new mongoose.Schema({
-  fullName: String,
-  occupation: String,
-  monthlyIncome: String,
-  relationship: String,
-  contactNo: String,
-}, { _id: false });
-
-const parentsGuardianSchema = new mongoose.Schema({
-  father: parentInfoSchema,
-  mother: parentInfoSchema,
-  guardian: guardianInfoSchema,
-}, { _id: false });
-
-const siblingSchema = new mongoose.Schema({
-  id: String,
-  fullName: String,
-  socialStatus: String,
-  civilStatus: String,
-  age: String,
-  schoolOrCompany: String,
-  schoolType: String,
-  tuitionOrIncome: String,
-  isDlsudScholar: Boolean,
-}, { _id: false });
-
-const assetsExpensesSchema = new mongoose.Schema({
-  houseAndLot: String,
-  automobile: String,
-  incomeSources: String,
-  combinedNonTaxableIncome: String,
-  affidavitNonFilingIncomeTax: String,
-  waterBill: String,
-  electricityBill: String,
-  telephoneBill: String,
-  mobilePhoneBill: String,
-  internetBill: String,
-  amortizationHouse: String,
-  amortizationAuto: String,
-}, { _id: false });
-
-const agreementSchema = new mongoose.Schema({
-  certifyConsulted: Boolean,
-  certifyAccuracy: Boolean,
-}, { _id: false });
-
-// fileId points at the GridFS file living in the applicationDocs bucket —
-// fetch its bytes back via GET /api/applications/documents/:fileId.
-// (No more `path`: there's no local disk file anymore, the bytes live in Atlas.)
+// One entry per uploaded document (built in routes/applications.js when
+// streaming files into GridFS) — fileId points at the GridFS file, docType
+// is the label the frontend supplied (e.g. "Application Letter", "Indigency").
 const documentSchema = new mongoose.Schema({
-  docType: { type: String, required: true },
+  docType: String,
   fileId: { type: mongoose.Schema.Types.ObjectId, required: true },
   filename: String,
   mimetype: String,
   size: Number,
-  uploadedAt: { type: Date, default: Date.now },
 }, { _id: false });
 
-// --- Main Application schema ---
-
 const applicationSchema = new mongoose.Schema({
-  studentNumber: {
-    type: String,
-    required: true,
-    index: true, // speeds up lookups like "all applications for this student"
-  },
+  // Taken from the authenticated Student record server-side, never from
+  // req.body directly — see routes/applications.js.
+  studentNumber: { type: String, required: true, index: true },
+
   scholarshipId: { type: String, required: true },
-  scholarshipName: String,
+  // Derived server-side from the scholarship registry (findScholarship),
+  // not trusted from the client.
+  scholarshipName: { type: String, required: true },
+
   applicationFormType: { type: String, enum: ['standard', 'sfag'], default: 'standard' },
 
-  standardInfo: {
-    firstName: String,
-    lastName: String,
-    email: String,
-    phone: String,
-    studentNumber: String,
-    program: String,
-    yearLevel: String,
-    gpa: String,
-  },
+  documents: { type: [documentSchema], default: [] },
 
-  personalInfo: personalInfoSchema,
-  contactSchool: contactSchoolSchema,
-  parentsGuardian: parentsGuardianSchema,
-  siblings: [siblingSchema],
-  assetsExpenses: assetsExpensesSchema,
-  agreement: agreementSchema,
+  referenceCode: { type: String, required: true, unique: true },
 
-  documents: [documentSchema],
+  // Populated only when applicationFormType === 'standard'.
+  standardInfo: { type: mongoose.Schema.Types.Mixed },
 
-  status: {
-    type: String,
-    enum: ['Under Evaluation', 'Approved', 'Rejected', 'Needs Revision'],
-    default: 'Under Evaluation',
-  },
-  referenceCode: String,
-  submittedAt: { type: Date, default: Date.now },
-  reviewedAt: Date,
-  reviewNotes: String,
+  // Populated only when applicationFormType === 'sfag'.
+  personalInfo: { type: mongoose.Schema.Types.Mixed },
+  contactSchool: { type: mongoose.Schema.Types.Mixed },
+  parentsGuardian: { type: mongoose.Schema.Types.Mixed },
+  siblings: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  assetsExpenses: { type: mongoose.Schema.Types.Mixed },
+  agreement: { type: mongoose.Schema.Types.Mixed },
+
+  // Not written by the submit route yet, but routes/students.js and the
+  // frontend's dashboard/explore views expect some notion of application
+  // status down the line — default keeps existing submit flow unaffected.
+  status: { type: String, enum: ['Under Evaluation', 'Approved', 'Rejected'], default: 'Under Evaluation' },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Application', applicationSchema);

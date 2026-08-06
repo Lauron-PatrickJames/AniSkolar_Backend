@@ -102,7 +102,7 @@ router.post('/', (req, res) => {
         scholarshipName,
         applicationFormType: applicationFormType || 'standard',
         documents,
-        referenceCode: `DLSU-D-SFAO-${Math.floor(Math.random() * 900000 + 100000)}`,
+        referenceCode: `DLSU-D-SFAG-${Math.floor(Math.random() * 900000 + 100000)}`,
       };
 
       if (applicationFormType === 'sfag') {
@@ -145,7 +145,7 @@ router.get('/student/:studentNumber', async (req, res) => {
   }
 });
 
-// GET a single stored document back out of GridFS, e.g. for SFAO staff review
+// GET a single stored document back out of GridFS, e.g. for SFAG staff review
 // or for the student to preview what they uploaded.
 router.get('/documents/:fileId', async (req, res) => {
   try {
