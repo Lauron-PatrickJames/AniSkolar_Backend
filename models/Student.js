@@ -56,6 +56,11 @@ const studentSchema = new mongoose.Schema({
         size: Number,
         uploadedAt: Date,
     },
+    // Synced from Clerk (clerkUser.imageUrl) at profile completion and on
+    // every PATCH /me — this is the Microsoft/Clerk-hosted avatar, distinct
+    // from `profilePicture` above which is a manually-uploaded file the
+    // student attaches themselves.
+    avatarUrl: String,
     fileRequirements: [{
     label: String,        // e.g. "Certificate of Registration", "Income Tax Return"
     filename: String,
