@@ -131,6 +131,7 @@ router.post('/complete-profile', async (req, res) => {
       studentNumber,
       name: `${clerkUser.firstName || ''} ${clerkUser.lastName || ''}`.trim() || 'Student',
       email: primaryEmail.toLowerCase(),
+      avatarUrl: clerkUser.imageUrl || undefined,
       ...data,
     });
 
@@ -163,6 +164,20 @@ router.patch('/me', async (req, res) => {
     }
 
     Object.assign(student, data);
+
+    // Keep the avatar synced with whatever Clerk/Microsoft currently has
+    // on file — a no-op fetch cost if it hasn't changed, but means a
+    // student who updates their Microsoft photo doesn't need a fresh
+    // sign-up to see it reflected here.
+    try {
+      const clerkUser = await clerkClient.users.getUser(userId);
+      if (clerkUser.imageUrl) student.avatarUrl = clerkUser.imageUrl;
+    } catch (syncErr) {
+      console.error('Avatar sync skipped:', syncErr);
+      // Not fatal — proceed with the save using whatever avatarUrl is
+      // already on the record.
+    }
+
     await student.save();
 
     res.json({ student });

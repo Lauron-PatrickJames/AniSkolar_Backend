@@ -11,6 +11,24 @@ const documentSchema = new mongoose.Schema({
   size: Number,
 }, { _id: false });
 
+// One entry per lifecycle event on an application. 'Submitted' and
+// 'Resubmitted' are student-originated (pushed from POST / and PATCH /:id
+// in routes/applications.js); the four review-status values are
+// admin-originated (pushed from PATCH /:id/status). changedBy is either
+// 'student' or the admin's email (req.adminUser.email, same value stored
+// in reviewedBy) — kept as a plain string rather than a ref since the
+// student side has no separate admin-style user record to point at.
+const historyEntrySchema = new mongoose.Schema({
+  status: {
+    type: String,
+    enum: ['Submitted', 'Resubmitted', 'Under Evaluation', 'Approved', 'Rejected', 'Needs Revision'],
+    required: true,
+  },
+  note: String,
+  changedBy: String,
+  changedAt: { type: Date, default: Date.now },
+}, { _id: false });
+
 const applicationSchema = new mongoose.Schema({
   // Taken from the authenticated Student record server-side, never from
   // req.body directly — see routes/applications.js.
@@ -38,10 +56,23 @@ const applicationSchema = new mongoose.Schema({
   assetsExpenses: { type: mongoose.Schema.Types.Mixed },
   agreement: { type: mongoose.Schema.Types.Mixed },
 
-  // Not written by the submit route yet, but routes/students.js and the
-  // frontend's dashboard/explore views expect some notion of application
-  // status down the line — default keeps existing submit flow unaffected.
-  status: { type: String, enum: ['Under Evaluation', 'Approved', 'Rejected'], default: 'Under Evaluation' },
+  status: {
+    type: String,
+    enum: ['Under Evaluation', 'Approved', 'Rejected', 'Needs Revision'],
+    default: 'Under Evaluation',
+  },
+  // Set by the admin-only PATCH /api/applications/:id/status route.
+  reviewNote: String,
+  reviewedBy: String,   // admin's email, from Clerk (see requireAdmin)
+  reviewedAt: Date,
+
+  // Full lifecycle log — submission, resubmissions, and every review
+  // decision, oldest first. Populated server-side only (see
+  // routes/applications.js); never accepted from req.body. Applications
+  // created before this field existed will simply have an empty/missing
+  // array — consumers (e.g. AdminAnalytics, ApplicationTimeline) already
+  // handle that by falling back to current status.
+  history: { type: [historyEntrySchema], default: [] },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Application', applicationSchema);
