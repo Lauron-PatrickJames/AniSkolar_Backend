@@ -352,7 +352,25 @@ router.get('/', requireAdmin, async (req, res) => {
       filter.scholarshipId = req.query.scholarshipId;
     }
 
-    const applications = await Application.find(filter).sort({ createdAt: -1 });
+    const applications = await Application.aggregate([
+      { $match: filter },
+      { $sort: { createdAt: -1 } },
+      {
+        $lookup: {
+          from: 'students',
+          localField: 'studentNumber',
+          foreignField: 'studentNumber',
+          as: 'studentRecord',
+        },
+      },
+      {
+        $addFields: {
+          avatarUrl: { $arrayElemAt: ['$studentRecord.avatarUrl', 0] },
+        },
+      },
+      { $project: { studentRecord: 0 } },
+    ]);
+
     res.json({ applications });
   } catch (err) {
     console.error('Admin fetch applications error:', err);
