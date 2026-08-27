@@ -313,6 +313,240 @@ router.get('/student/:studentNumber', async (req, res) => {
   }
 });
 
+// GET /api/applications/export/scholars — admin-only. Builds the scholar
+// lifecycle CSV entirely server-side via aggregation, so exporting doesn't
+// require pulling every application down to the browser first. Accepts the
+// same filter/sort semantics as the AdminScholars UI (search, renewal,
+// sort) so "export what I'm looking at" stays true even as the dataset
+// grows into the thousands.
+//
+// IMPORTANT: this route must be registered BEFORE router.get('/:id') below,
+// otherwise Express will match "/export/scholars" against the ":id" param
+// route first and try to parse "export" as an ObjectId.
+router.get('/export/scholars', requireAdmin, async (req, res) => {
+  try {
+    const { search = '', renewal = 'all', sort = 'recent' } = req.query;
+
+    const pipeline = [
+      // Group applications by student first — everything downstream
+      // (renewing/first-time, latest status, counts) is a property of the
+      // student, not any single application.
+      {
+        $group: {
+          _id: '$studentNumber',
+          applications: { $push: '$$ROOT' },
+          totalApplications: { $sum: 1 },
+          approvedCount: { $sum: { $cond: [{ $eq: ['$status', 'Approved'] }, 1, 0] } },
+          rejectedCount: { $sum: { $cond: [{ $eq: ['$status', 'Rejected'] }, 1, 0] } },
+          latestCreatedAt: { $max: '$createdAt' },
+          firstSubmission: { $min: '$createdAt' },
+        },
+      },
+      {
+        $addFields: {
+          isRenewing: { $gt: ['$totalApplications', 1] },
+          // Pull the single most recent application out of the pushed
+          // array to read name/status/program off of, same as
+          // buildScholarSummaries did client-side with `latest`.
+          // NOTE: $sortArray requires MongoDB 5.2+. If you're on an older
+          // server, replace this block — see comment further down.
+          latestApplication: {
+            $arrayElemAt: [
+              {
+                $sortArray: {
+                  input: '$applications',
+                  sortBy: { createdAt: -1 },
+                },
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $lookup: {
+          from: 'students',
+          localField: '_id',
+          foreignField: 'studentNumber',
+          as: 'studentRecord',
+        },
+      },
+      { $unwind: { path: '$studentRecord', preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          studentNumber: '$_id',
+          name: {
+            $cond: [
+              { $eq: ['$latestApplication.applicationFormType', 'sfag'] },
+              {
+                $concat: [
+                  { $ifNull: ['$latestApplication.personalInfo.firstName', ''] },
+                  ' ',
+                  { $ifNull: ['$latestApplication.personalInfo.lastName', ''] },
+                ],
+              },
+              {
+                $concat: [
+                  { $ifNull: ['$latestApplication.standardInfo.firstName', ''] },
+                  ' ',
+                  { $ifNull: ['$latestApplication.standardInfo.lastName', ''] },
+                ],
+              },
+            ],
+          },
+          email: {
+            $cond: [
+              { $eq: ['$latestApplication.applicationFormType', 'sfag'] },
+              '$latestApplication.contactSchool.email',
+              '$latestApplication.standardInfo.email',
+            ],
+          },
+          phone: {
+            $cond: [
+              { $eq: ['$latestApplication.applicationFormType', 'sfag'] },
+              '$latestApplication.contactSchool.mobileNo',
+              '$latestApplication.standardInfo.phone',
+            ],
+          },
+          program: {
+            $cond: [
+              { $eq: ['$latestApplication.applicationFormType', 'sfag'] },
+              '$latestApplication.personalInfo.course',
+              '$latestApplication.standardInfo.program',
+            ],
+          },
+          yearLevel: {
+            $cond: [
+              { $eq: ['$latestApplication.applicationFormType', 'sfag'] },
+              '$latestApplication.personalInfo.yearLevel',
+              '$latestApplication.standardInfo.yearLevel',
+            ],
+          },
+          latestStatus: '$latestApplication.status',
+        },
+      },
+    ];
+
+    // Search filter — name, student number, or program, same fields the
+    // UI's search box matches on. Applied after the $addFields above since
+    // it needs `name`/`program` computed first.
+    if (search && String(search).trim()) {
+      const q = String(search).trim();
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(escaped, 'i');
+      pipeline.push({
+        $match: {
+          $or: [
+            { name: regex },
+            { studentNumber: regex },
+            { program: regex },
+          ],
+        },
+      });
+    }
+
+    if (renewal === 'renewing') pipeline.push({ $match: { isRenewing: true } });
+    if (renewal === 'first_time') pipeline.push({ $match: { isRenewing: false } });
+
+    if (sort === 'most_applications') {
+      pipeline.push({ $sort: { totalApplications: -1 } });
+    } else if (sort === 'name') {
+      pipeline.push({ $sort: { name: 1 } });
+    } else {
+      pipeline.push({ $sort: { latestCreatedAt: -1 } });
+    }
+
+    pipeline.push({
+      $project: {
+        _id: 0,
+        studentNumber: 1,
+        name: 1,
+        email: 1,
+        phone: 1,
+        program: 1,
+        yearLevel: 1,
+        totalApplications: 1,
+        approvedCount: 1,
+        rejectedCount: 1,
+        latestStatus: 1,
+        isRenewing: 1,
+        firstSubmission: 1,
+      },
+    });
+
+        const scholars = await Application.aggregate(pipeline);
+
+    // Build the CSV the same way as before — quoted fields, UTF-8 BOM for
+    // Excel, CRLF line endings — but now only include the columns the
+    // admin actually picked, via a registry so both "which fields exist"
+    // and "how to compute each one" live in one place.
+    const csvField = (value) => {
+      const str = String(value ?? '');
+      return `"${str.replace(/"/g, '""')}"`;
+    };
+    const formatDate = (iso) => {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso);
+      return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    };
+
+    // Keys MUST match EXPORT_COLUMNS' keys in AdminScholars.tsx exactly,
+    // since the frontend sends these as the ?columns= query param.
+    const COLUMN_REGISTRY = {
+      studentNumber: { label: 'Student Number', getValue: (s) => s.studentNumber },
+      name: { label: 'Name', getValue: (s) => (s.name || '').trim() || 'Unknown Applicant' },
+      email: { label: 'Email', getValue: (s) => s.email || '' },
+      phone: { label: 'Phone', getValue: (s) => s.phone || '' },
+      program: { label: 'Program', getValue: (s) => s.program || '' },
+      yearLevel: { label: 'Year Level', getValue: (s) => s.yearLevel || '' },
+      totalApplications: { label: 'Total Applications', getValue: (s) => s.totalApplications },
+      approvedCount: { label: 'Approved', getValue: (s) => s.approvedCount },
+      rejectedCount: { label: 'Rejected', getValue: (s) => s.rejectedCount },
+      approvalRate: {
+        label: 'Approval Rate',
+        getValue: (s) => {
+          const decided = s.approvedCount + s.rejectedCount;
+          return decided > 0 ? `${((s.approvedCount / decided) * 100).toFixed(0)}%` : '—';
+        },
+      },
+      latestStatus: { label: 'Current Status', getValue: (s) => s.latestStatus || '' },
+      isRenewing: { label: 'Renewing', getValue: (s) => (s.isRenewing ? 'Yes' : 'No') },
+      firstSubmission: { label: 'First Submission', getValue: (s) => formatDate(s.firstSubmission) },
+    };
+    const DEFAULT_COLUMNS = [
+      'studentNumber', 'name', 'email', 'phone', 'program', 'yearLevel',
+      'totalApplications', 'approvedCount', 'rejectedCount', 'latestStatus',
+      'isRenewing', 'firstSubmission',
+    ];
+
+    // ?columns=studentNumber,name,program — comma-separated keys, in the
+    // exact order the admin wants them. Unknown keys are silently dropped
+    // rather than erroring, so a stale/bad param never breaks the export.
+    // Falls back to every default column if the param is missing, empty,
+    // or resolves to nothing valid.
+    const requestedColumns = typeof req.query.columns === 'string' && req.query.columns.trim()
+      ? req.query.columns.split(',').map((c) => c.trim()).filter((c) => COLUMN_REGISTRY[c])
+      : [];
+    const activeColumns = requestedColumns.length > 0 ? requestedColumns : DEFAULT_COLUMNS;
+
+    const headers = activeColumns.map((key) => COLUMN_REGISTRY[key].label);
+    const rows = scholars.map((s) =>
+      activeColumns.map((key) => csvField(COLUMN_REGISTRY[key].getValue(s))).join(',')
+    );
+
+    const csv = '\uFEFF' + [headers.map(csvField).join(','), ...rows].join('\r\n');
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="scholars-export-${stamp}.csv"`);
+    res.status(200).send(csv);
+  } catch (err) {
+    console.error('Scholar export error:', err);
+    res.status(500).json({ error: 'Failed to export scholars.' });
+  }
+});
+
 // GET /api/applications/:id — fetch a single application in full. Added so
 // fetchFullApplication (App.tsx) has a real endpoint to hit instead of
 // 404ing and silently falling back to the list-endpoint summary.
