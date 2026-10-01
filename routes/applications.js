@@ -739,8 +739,22 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Application not found.' });
     }
 
+    // Once the LSO has overridden an office's decision, the office can no
+    // longer change the status or the note the student sees — the LSO's
+    // decision is final. (Office-use fields stay editable; see
+    // PATCH /:id/admin-fields.)
+    const office = scopedOffice(req.adminUser);
+    if (office && application.decisionOffice === 'LSO') {
+      return res.status(409).json({ error: 'The LSO has overridden this decision, so it can no longer be changed by your office.' });
+    }
+
+    // Only a real status change records who decided. "Save note only"
+    // re-sends the current status and must not turn into (or erase) an
+    // LSO override.
+    if (status !== application.status) {
+      application.decisionOffice = office || 'LSO';
+    }
     application.status = status;
-    application.decisionOffice = req.adminUser.office || 'LSO';
     application.reviewNote = reviewNote || undefined;
     application.reviewedBy = req.adminUser.email;
     application.reviewedAt = new Date();
@@ -755,7 +769,6 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
 
     // An office (POLCA / Alumni) approving one of its applications sends it
     // to the LSO right away, instead of waiting for the next "Send to LSO".
-    const office = scopedOffice(req.adminUser);
     if (office && status === 'Approved' && !application.forwardedAt) {
       application.forwardedAt = application.reviewedAt;
       application.forwardedBy = req.adminUser.email;
@@ -768,7 +781,19 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
       });
     }
 
-    await application.save();
+    // Guard the write itself too: if the LSO overrides between our read
+    // and this save, the office's save matches nothing and fails below
+    // instead of silently replacing the LSO's decision.
+    if (office) application.$where = { decisionOffice: { $ne: 'LSO' } };
+
+    try {
+      await application.save();
+    } catch (saveErr) {
+      if (saveErr.name === 'DocumentNotFoundError') {
+        return res.status(409).json({ error: 'The LSO has overridden this decision, so it can no longer be changed by your office.' });
+      }
+      throw saveErr;
+    }
 
     res.json({ application });
   } catch (err) {
@@ -792,19 +817,12 @@ router.post('/forward', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Only POLCA and Alumni office admins send applications to the LSO.' });
     }
 
-    const pending = { office, forwardedAt: null };
-    const byStatus = await Application.aggregate([
-      { $match: pending },
-      { $group: { _id: '$status', count: { $sum: 1 } } },
-    ]);
-    const total = byStatus.reduce((sum, s) => sum + s.count, 0);
-    if (total === 0) {
-      return res.status(400).json({ error: 'There are no new applications to send.' });
-    }
-
+    // Mark the batch first, then count what this batch actually contains,
+    // so the reported totals always match what was sent — even if a new
+    // submission or an auto-forward (approval) lands at the same time.
     const forwardedAt = new Date();
     const forwardBatchId = `${office}-${forwardedAt.getTime()}`;
-    const result = await Application.updateMany(pending, {
+    const result = await Application.updateMany({ office, forwardedAt: null }, {
       $set: { forwardedAt, forwardedBy: req.adminUser.email, forwardBatchId },
       $push: {
         history: {
@@ -815,6 +833,14 @@ router.post('/forward', requireAdmin, async (req, res) => {
         },
       },
     });
+
+    if (result.modifiedCount === 0) {
+      return res.status(400).json({ error: 'There are no new applications to send.' });
+    }
+    const byStatus = await Application.aggregate([
+      { $match: { forwardBatchId } },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]);
 
     res.json({
       forwarded: result.modifiedCount,
