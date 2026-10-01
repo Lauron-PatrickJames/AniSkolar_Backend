@@ -745,7 +745,7 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
     // PATCH /:id/admin-fields.)
     const office = scopedOffice(req.adminUser);
     if (office && application.decisionOffice === 'LSO') {
-      return res.status(409).json({ error: 'The LSO has overridden this decision, so it can no longer be changed by your office.' });
+      return res.status(409).json({ error: 'The Scholarship Office has overridden this decision, so it can no longer be changed by your office.' });
     }
 
     // Only a real status change records who decided. "Save note only"
@@ -790,7 +790,7 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
       await application.save();
     } catch (saveErr) {
       if (saveErr.name === 'DocumentNotFoundError') {
-        return res.status(409).json({ error: 'The LSO has overridden this decision, so it can no longer be changed by your office.' });
+        return res.status(409).json({ error: 'The Scholarship Office has overridden this decision, so it can no longer be changed by your office.' });
       }
       throw saveErr;
     }
@@ -814,7 +814,7 @@ router.post('/forward', requireAdmin, async (req, res) => {
   try {
     const office = scopedOffice(req.adminUser);
     if (!office) {
-      return res.status(400).json({ error: 'Only POLCA and Alumni office admins send applications to the LSO.' });
+      return res.status(400).json({ error: 'Only POLCA and Alumni office admins send applications to the Scholarship Office.' });
     }
 
     // Mark the batch first, then count what this batch actually contains,
@@ -850,7 +850,7 @@ router.post('/forward', requireAdmin, async (req, res) => {
     });
   } catch (err) {
     console.error('Forward to LSO error:', err);
-    res.status(500).json({ error: 'Failed to send applications to the LSO.' });
+    res.status(500).json({ error: 'Failed to send applications to the Scholarship Office.' });
   }
 });
 
