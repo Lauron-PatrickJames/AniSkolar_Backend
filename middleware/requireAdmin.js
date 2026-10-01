@@ -11,6 +11,9 @@ const { getAuth, clerkClient } = require('@clerk/express');
 // one), go to Metadata, and add public metadata { "role": "admin" }.
 // Or via a seed script:
 //   await clerkClient.users.updateUserMetadata(userId, { publicMetadata: { role: 'admin' } });
+//
+// For an office-scoped admin (e.g. POLCA staff), also add the office:
+//   { "role": "admin", "office": "POLCA" }   // or "ALUMNI"; "LSO"/none = all offices
 async function requireAdmin(req, res, next) {
   try {
     const { userId } = getAuth(req);
@@ -23,7 +26,14 @@ async function requireAdmin(req, res, next) {
       return res.status(403).json({ error: 'Admin access required.' });
     }
 
-    req.adminUser = { id: userId, email: user.emailAddresses?.[0]?.emailAddress };
+    // Optional publicMetadata.office (e.g. "POLCA") scopes which
+    // applications this admin can see — see utils/officeScope.js. Admins
+    // without one keep seeing everything.
+    const office = typeof user.publicMetadata?.office === 'string'
+      ? user.publicMetadata.office.trim().toUpperCase()
+      : undefined;
+
+    req.adminUser = { id: userId, email: user.emailAddresses?.[0]?.emailAddress, office: office || undefined };
     next();
   } catch (err) {
     console.error('requireAdmin check failed:', err);
