@@ -8,11 +8,10 @@
 // server-side (e.g. their own MongoDB collection), replace this file with
 // a DB query and delete this comment.
 //
-// office: which scholarship office reviews the grant. Admins whose Clerk
-// publicMetadata carries { office: '<OFFICE>' } (anything other than
-// 'LSO') only see applications for their own office — see
-// utils/officeScope.js. Admins with no office set (or 'LSO') see every
-// office, same as before offices existed.
+// office: which scholarship office reviews the grant ('LSO' is the AdSO's
+// stored code). Every admin has an office in their Clerk publicMetadata
+// (ADSO, POLCA or ALUMNI); see middleware/requireAdmin.js and
+// utils/officeScope.js for who sees what.
 //
 // For the grant-form scholarships (applicationFormType 'polca' / 'alumni'):
 //   - eligibility: the rules checked at apply time (utils/grantForms.js).
