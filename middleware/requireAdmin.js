@@ -13,7 +13,7 @@ const { getAuth, clerkClient } = require('@clerk/express');
 //   await clerkClient.users.updateUserMetadata(userId, { publicMetadata: { role: 'admin' } });
 //
 // For an office-scoped admin (e.g. POLCA staff), also add the office:
-//   { "role": "admin", "office": "POLCA" }   // or "ALUMNI"; "LSO"/none = all offices
+//   { "role": "admin", "office": "POLCA" }   // or "ALUMNI"; no office (or "LSO") = the LSO
 async function requireAdmin(req, res, next) {
   try {
     const { userId } = getAuth(req);
@@ -28,7 +28,8 @@ async function requireAdmin(req, res, next) {
 
     // Optional publicMetadata.office (e.g. "POLCA") scopes which
     // applications this admin can see — see utils/officeScope.js. Admins
-    // without one keep seeing everything.
+    // without one are the LSO: their own applications plus whatever the
+    // other offices have sent over.
     const office = typeof user.publicMetadata?.office === 'string'
       ? user.publicMetadata.office.trim().toUpperCase()
       : undefined;

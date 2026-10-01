@@ -68,13 +68,15 @@ AniSkolar_Backend/
 
 ## Scholarship Offices
 
-Each scholarship in `data/scholarships.js` belongs to an office (`LSO`, `POLCA`, `ALUMNI`), and each application stores that office. To give an admin access to only one office's applications, set their Clerk public metadata to:
+Each scholarship in `data/scholarships.js` belongs to an office (`LSO`, `POLCA`, `ALUMNI`), and each application stores that office. Which applications an admin sees depends on the `office` in their Clerk public metadata:
 
-```json
-{ "role": "admin", "office": "POLCA" }
-```
+| Clerk public metadata | Sees |
+|---|---|
+| `{ "role": "admin" }` (no office) | The LSO: its own applications (SFA Grant, Entrance) plus whatever POLCA and Alumni have sent over |
+| `{ "role": "admin", "office": "POLCA" }` | Only POLCA applications |
+| `{ "role": "admin", "office": "ALUMNI" }` | Only Alumni Association applications |
 
-Admins with no `office` (or `"LSO"`) see every office, as before.
+POLCA and Alumni admins review their own applicants, then click **Send to LSO** (`POST /api/applications/forward`). That sends every application the office hasn't sent yet, whatever its status. Applications submitted later stay with the office until its next send. The office's decision stands, but the LSO can override it; the dashboard labels overrides.
 
 After deploying, tag existing applications with their office once:
 

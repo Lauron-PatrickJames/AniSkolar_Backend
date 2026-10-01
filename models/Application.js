@@ -41,7 +41,7 @@ const adminFieldsSchema = new mongoose.Schema({
 const historyEntrySchema = new mongoose.Schema({
   status: {
     type: String,
-    enum: ['Submitted', 'Resubmitted', 'Under Evaluation', 'Approved', 'Rejected', 'Needs Revision'],
+    enum: ['Submitted', 'Resubmitted', 'Under Evaluation', 'Approved', 'Rejected', 'Needs Revision', 'Forwarded to LSO'],
     required: true,
   },
   note: String,
@@ -96,6 +96,18 @@ const applicationSchema = new mongoose.Schema({
   evaluationSheet: { type: mongoose.Schema.Types.Mixed },
 
   adminFields: { type: adminFieldsSchema },
+
+  // Set when a POLCA / Alumni office sends its applications to the LSO
+  // (POST /api/applications/forward). Until then the LSO can't see them;
+  // see utils/officeScope.js. Always unset for LSO's own applications.
+  forwardedAt: { type: Date, default: null },
+  forwardedBy: String,          // office admin's email
+  forwardBatchId: String,       // groups everything sent in one "Send to LSO"
+
+  // Which office recorded the current status ('LSO', 'POLCA', 'ALUMNI').
+  // The office's decision stands unless the LSO changes it, so an office
+  // application with decisionOffice 'LSO' is an LSO override.
+  decisionOffice: String,
 
   status: {
     type: String,
