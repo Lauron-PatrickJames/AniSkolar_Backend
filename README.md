@@ -68,15 +68,17 @@ AniSkolar_Backend/
 
 ## Scholarship Offices
 
-Each scholarship in `data/scholarships.js` belongs to an office (`LSO`, `POLCA`, `ALUMNI`), and each application stores that office. Which applications an admin sees depends on the `office` in their Clerk public metadata:
+Each scholarship in `data/scholarships.js` belongs to an office (`LSO` = AdSO, `POLCA`, `ALUMNI`), and each application stores that office. Every admin account needs an `office` in its Clerk public metadata. An admin without one (or with any other value) is refused.
 
 | Clerk public metadata | Sees |
 |---|---|
-| `{ "role": "admin" }` (no office) | The LSO: its own applications (SFA Grant, Entrance) plus whatever POLCA and Alumni have sent over |
+| `{ "role": "admin", "office": "ADSO" }` | The Admissions and Scholarship Office (AdSO): its own applications (SFA Grant, Entrance) plus whatever POLCA and Alumni have sent over |
 | `{ "role": "admin", "office": "POLCA" }` | Only POLCA applications |
 | `{ "role": "admin", "office": "ALUMNI" }` | Only Alumni Association applications |
 
-When a POLCA or Alumni admin **approves** an application, it's sent to the LSO automatically. For everything else, they click **Send to LSO** (`POST /api/applications/forward`). That sends every application the office hasn't sent yet, whatever its status. Applications submitted later stay with the office until its next send. The office's decision stands, but the LSO can override it; the dashboard labels overrides, and once the LSO overrides, the office can no longer change that application's status or note.
+Applications store the AdSO as the office code `LSO` (its code before the rename), so no data migration is needed.
+
+When a POLCA or Alumni admin **approves** an application, it's sent to the AdSO automatically. For everything else, they click **Send to AdSO** (`POST /api/applications/forward`). That sends every application the office hasn't sent yet, whatever its status. Applications submitted later stay with the office until its next send. The office's decision stands, but the AdSO can override it; the dashboard labels overrides, and once the AdSO overrides, the office can no longer change that application's status or note.
 
 After deploying, tag existing applications with their office once:
 
