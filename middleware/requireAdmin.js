@@ -5,15 +5,23 @@ const { getAuth, clerkClient } = require('@clerk/express');
 // deliberately have no Student document at all, so "is this user an
 // admin" can't be answered from Mongo the way student identity can.
 // Instead we check Clerk's own publicMetadata, set once at provisioning
-// time: { role: "admin" }.
+// time: { role: "admin", office: "<OFFICE>" }.
+//
+// Every admin must belong to an office:
+//   { "role": "admin", "office": "ADSO" }    // Admissions and Scholarship Office
+//   { "role": "admin", "office": "POLCA" }
+//   { "role": "admin", "office": "ALUMNI" }
+// An admin with no office, or one not listed here, is refused (403).
 //
 // To provision an admin: in the Clerk Dashboard, open the user (or create
-// one), go to Metadata, and add public metadata { "role": "admin" }.
-// Or via a seed script:
-//   await clerkClient.users.updateUserMetadata(userId, { publicMetadata: { role: 'admin' } });
-//
-// For an office-scoped admin (e.g. POLCA staff), also add the office:
-//   { "role": "admin", "office": "POLCA" }   // or "ALUMNI"; no office (or "LSO") = the LSO
+// one), go to Metadata, and add the public metadata above. Or via a seed
+// script:
+//   await clerkClient.users.updateUserMetadata(userId, { publicMetadata: { role: 'admin', office: 'ADSO' } });
+
+// Clerk metadata value -> office code stored on applications. The AdSO is
+// stored as 'LSO' (its code from before the rename), so existing records
+// need no migration.
+const ADMIN_OFFICES = { ADSO: 'LSO', POLCA: 'POLCA', ALUMNI: 'ALUMNI' };
 async function requireAdmin(req, res, next) {
   try {
     const { userId } = getAuth(req);
@@ -26,15 +34,19 @@ async function requireAdmin(req, res, next) {
       return res.status(403).json({ error: 'Admin access required.' });
     }
 
-    // Optional publicMetadata.office (e.g. "POLCA") scopes which
-    // applications this admin can see — see utils/officeScope.js. Admins
-    // without one are the LSO: their own applications plus whatever the
-    // other offices have sent over.
-    const office = typeof user.publicMetadata?.office === 'string'
+    // publicMetadata.office decides which applications this admin can see
+    // — see utils/officeScope.js.
+    const requested = typeof user.publicMetadata?.office === 'string'
       ? user.publicMetadata.office.trim().toUpperCase()
-      : undefined;
+      : '';
+    const office = ADMIN_OFFICES[requested];
+    if (!office) {
+      return res.status(403).json({
+        error: 'This admin account isn\'t assigned to an office. Ask a system administrator to set its office (ADSO, POLCA or ALUMNI) in Clerk.',
+      });
+    }
 
-    req.adminUser = { id: userId, email: user.emailAddresses?.[0]?.emailAddress, office: office || undefined };
+    req.adminUser = { id: userId, email: user.emailAddresses?.[0]?.emailAddress, office };
     next();
   } catch (err) {
     console.error('requireAdmin check failed:', err);
@@ -42,4 +54,4 @@ async function requireAdmin(req, res, next) {
   }
 }
 
-module.exports = { requireAdmin };
+module.exports = { requireAdmin, ADMIN_OFFICES };
