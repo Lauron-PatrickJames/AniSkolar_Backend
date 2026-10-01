@@ -753,7 +753,21 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
       changedAt: application.reviewedAt,
     });
 
-    console.log('history before save:', application.history.length);
+    // An office (POLCA / Alumni) approving one of its applications sends it
+    // to the LSO right away, instead of waiting for the next "Send to LSO".
+    const office = scopedOffice(req.adminUser);
+    if (office && status === 'Approved' && !application.forwardedAt) {
+      application.forwardedAt = application.reviewedAt;
+      application.forwardedBy = req.adminUser.email;
+      application.forwardBatchId = `${office}-approved-${application.reviewedAt.getTime()}`;
+      application.history.push({
+        status: 'Forwarded to LSO',
+        note: `Sent automatically when approved by the ${office} office`,
+        changedBy: req.adminUser.email,
+        changedAt: application.reviewedAt,
+      });
+    }
+
     await application.save();
 
     res.json({ application });
@@ -769,6 +783,8 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
 // afterwards stay with the office until its next send. The office keeps
 // reviewing sent applications; its decision stands unless the LSO
 // overrides it (PATCH /:id/status records which office decided).
+// Approving an application already sends it on its own (see
+// PATCH /:id/status), so this mainly covers the other statuses.
 router.post('/forward', requireAdmin, async (req, res) => {
   try {
     const office = scopedOffice(req.adminUser);
