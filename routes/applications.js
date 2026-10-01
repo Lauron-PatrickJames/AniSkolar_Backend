@@ -7,15 +7,96 @@ const { applicationUpload } = require('../middleware/uploadConfig');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const { getBucket } = require('../utils/gridfs');
 const Application = require('../models/Application');
+const ApplicationDraft = require('../models/ApplicationDraft');
+const { findScholarship } = require('../data/scholarships');
+const { officeFilter } = require('../utils/officeScope');
+const {
+  isGrantFormType,
+  parseGrantSections,
+  checkEligibility,
+  checkCertifications,
+  missingDocumentSlots,
+  parseDocumentMeta,
+} = require('../utils/grantForms');
 
 const ALLOWED_STATUSES = ['Under Evaluation', 'Approved', 'Rejected', 'Needs Revision'];
 
-// Accept up to 8 files under the same field name "documents", plus a
+// Accept up to 25 files under the same field name "documents", plus a
 // parallel JSON array "documentLabels" telling us which requirement
 // each file corresponds to (e.g. ["Application Letter", "Indigency", ...]).
 // This matches your frontend's dynamic scholarship.requirements list
-// instead of hardcoding fixed field names.
-const uploadDocs = applicationUpload.array('documents', 8);
+// instead of hardcoding fixed field names. (Was 8 — the POLCA flow has 12
+// upload slots, one of which takes several residence pictures.) Grant-form
+// flows also send "documentMeta" ([{ slotKey, variant? }], same order).
+const MAX_DOCUMENT_FILES = 25;
+const uploadDocs = applicationUpload.array('documents', MAX_DOCUMENT_FILES);
+
+// Office-internal fields never leave the server on student-facing routes.
+const STUDENT_HIDDEN_FIELDS = '-adminFields';
+
+function toStudentView(application) {
+  const obj = application.toObject ? application.toObject() : { ...application };
+  delete obj.adminFields;
+  return obj;
+}
+
+// Streams every file into GridFS (MongoDB Atlas). If any single upload
+// fails partway through, the ones that already succeeded are deleted so
+// no orphaned files are left behind, and the error is rethrown.
+async function storeFilesInGridFS(files, labels, meta = []) {
+  const bucket = getBucket();
+  const uploadedFileIds = [];
+  try {
+    return await Promise.all(
+      files.map(
+        (file, idx) =>
+          new Promise((resolve, reject) => {
+            const uploadStream = bucket.openUploadStream(file.originalname, {
+              metadata: { docType: labels[idx], mimetype: file.mimetype },
+            });
+            uploadedFileIds.push(uploadStream.id);
+            Readable.from(file.buffer)
+              .pipe(uploadStream)
+              .on('error', reject)
+              .on('finish', () => {
+                resolve({
+                  docType: labels[idx],
+                  slotKey: meta[idx]?.slotKey,
+                  variant: meta[idx]?.variant,
+                  fileId: uploadStream.id,
+                  filename: file.originalname,
+                  mimetype: file.mimetype,
+                  size: file.size,
+                });
+              });
+          })
+      )
+    );
+  } catch (uploadErr) {
+    await Promise.allSettled(uploadedFileIds.map(id => bucket.delete(id)));
+    throw uploadErr;
+  }
+}
+
+// Validates a grant-form (POLCA / Alumni) submission before anything is
+// written. `presentSlotKeys` is every slot that will have a file once this
+// request is applied. Returns { sections } or { error }.
+function validateGrantSubmission(scholarship, body, presentSlotKeys) {
+  const { sections, error } = parseGrantSections(body, scholarship.formType);
+  if (error) return { error };
+
+  const problems = [
+    ...checkEligibility(scholarship, sections),
+    ...checkCertifications(scholarship.formType, sections),
+  ];
+  if (problems.length) return { error: problems.join(' ') };
+
+  const missing = missingDocumentSlots(scholarship, sections, presentSlotKeys);
+  if (missing.length) {
+    return { error: `Please upload all required documents. Missing: ${missing.join(', ')}.` };
+  }
+  return { sections };
+}
 
 router.post('/', (req, res) => {
   uploadDocs(req, res, async (err) => {
@@ -32,7 +113,6 @@ router.post('/', (req, res) => {
       const {
         studentNumber,
         scholarshipId,
-        scholarshipName,
         applicationFormType,
         standardInfo,
         personalInfo,
@@ -42,10 +122,18 @@ router.post('/', (req, res) => {
         assetsExpenses,
         agreement,
         documentLabels,
+        documentMeta,
       } = req.body;
 
       if (!studentNumber || !scholarshipId) {
         return res.status(400).json({ error: 'Missing student number or scholarship reference.' });
+      }
+
+      // Name, office and (for grant forms) form type come from the
+      // registry, never from the client.
+      const scholarship = findScholarship(scholarshipId);
+      if (!scholarship) {
+        return res.status(400).json({ error: 'Unknown scholarship.' });
       }
 
       if (!req.files || req.files.length === 0) {
@@ -63,38 +151,27 @@ router.post('/', (req, res) => {
         return res.status(400).json({ error: 'Document count does not match label count.' });
       }
 
-      // Stream every file into GridFS (MongoDB Atlas) instead of disk.
-      // If any single upload fails partway through, we clean up the ones
-      // that already succeeded so we don't leave orphaned files in GridFS.
-      const bucket = getBucket();
-      const uploadedFileIds = [];
+      const isGrant = isGrantFormType(scholarship.formType);
+      const formType = isGrant ? scholarship.formType : (applicationFormType || 'standard');
+
+      // Grant forms are fully validated up front so a rejected submission
+      // never leaves files behind in GridFS.
+      let meta = [];
+      let grantSections;
+      if (isGrant) {
+        const parsedMeta = parseDocumentMeta(documentMeta, req.files.length);
+        if (parsedMeta.error) return res.status(400).json({ error: parsedMeta.error });
+        meta = parsedMeta.meta;
+        const presentSlotKeys = new Set(meta.map(m => m.slotKey).filter(Boolean));
+        const result = validateGrantSubmission(scholarship, req.body, presentSlotKeys);
+        if (result.error) return res.status(400).json({ error: result.error });
+        grantSections = result.sections;
+      }
+
       let documents;
       try {
-        documents = await Promise.all(
-          req.files.map(
-            (file, idx) =>
-              new Promise((resolve, reject) => {
-                const uploadStream = bucket.openUploadStream(file.originalname, {
-                  metadata: { docType: labels[idx], mimetype: file.mimetype },
-                });
-                uploadedFileIds.push(uploadStream.id);
-                Readable.from(file.buffer)
-                  .pipe(uploadStream)
-                  .on('error', reject)
-                  .on('finish', () => {
-                    resolve({
-                      docType: labels[idx],
-                      fileId: uploadStream.id,
-                      filename: file.originalname,
-                      mimetype: file.mimetype,
-                      size: file.size,
-                    });
-                  });
-              })
-          )
-        );
+        documents = await storeFilesInGridFS(req.files, labels, meta);
       } catch (uploadErr) {
-        await Promise.allSettled(uploadedFileIds.map(id => bucket.delete(id)));
         console.error('GridFS upload failed:', uploadErr);
         return res.status(500).json({ error: 'Failed to store uploaded documents. Please try again.' });
       }
@@ -102,16 +179,19 @@ router.post('/', (req, res) => {
       const applicationData = {
         studentNumber,
         scholarshipId,
-        scholarshipName,
-        applicationFormType: applicationFormType || 'standard',
+        scholarshipName: scholarship.name,
+        office: scholarship.office,
+        applicationFormType: formType,
         documents,
-        referenceCode: `DLSU-D-SFAG-${Math.floor(Math.random() * 900000 + 100000)}`,
+        referenceCode: `${scholarship.referencePrefix || 'DLSU-D-SFAG'}-${Math.floor(Math.random() * 900000 + 100000)}`,
         // First lifecycle event. changedBy is always 'student' here since
         // this route only ever runs for the applicant's own submission.
         history: [{ status: 'Submitted', changedBy: 'student', changedAt: new Date() }],
       };
 
-      if (applicationFormType === 'sfag') {
+      if (isGrant) {
+        Object.assign(applicationData, grantSections);
+      } else if (formType === 'sfag') {
         if (!personalInfo || !contactSchool || !parentsGuardian || !assetsExpenses || !agreement) {
           return res.status(400).json({ error: 'Missing required SFAG form sections.' });
         }
@@ -130,9 +210,13 @@ router.post('/', (req, res) => {
 
       const application = await Application.create(applicationData);
 
+      // The saved-for-later draft (routes/applicationDrafts.js) has done its
+      // job once the real application exists.
+      await ApplicationDraft.deleteOne({ studentNumber, scholarshipId }).catch(() => {});
+
       res.status(201).json({
         message: 'Application submitted successfully.',
-        application,
+        application: toStudentView(application),
       });
     } catch (err) {
       console.error('Application submit error:', err);
@@ -200,6 +284,7 @@ router.patch('/:id', (req, res) => {
         assetsExpenses,
         agreement,
         documentLabels,
+        documentMeta,
       } = req.body;
 
       let labels;
@@ -209,57 +294,60 @@ router.patch('/:id', (req, res) => {
         return res.status(400).json({ error: 'Invalid document labels format.' });
       }
 
-      if (req.files && labels.length !== req.files.length) {
+      const files = req.files || [];
+      if (labels.length !== files.length) {
         return res.status(400).json({ error: 'Document count does not match label count.' });
       }
 
+      // A grant-form application stays a grant-form application; its type
+      // can't be switched by the resubmission body.
+      const isGrant = isGrantFormType(existing.applicationFormType);
+      let meta = [];
+      let grantSections;
+      if (isGrant) {
+        const scholarship = findScholarship(existing.scholarshipId);
+        if (!scholarship) {
+          return res.status(400).json({ error: 'Unknown scholarship.' });
+        }
+        const parsedMeta = parseDocumentMeta(documentMeta, files.length);
+        if (parsedMeta.error) return res.status(400).json({ error: parsedMeta.error });
+        meta = parsedMeta.meta;
+        const presentSlotKeys = new Set([
+          ...existing.documents.map(d => d.slotKey),
+          ...meta.map(m => m.slotKey),
+        ].filter(Boolean));
+        const result = validateGrantSubmission(scholarship, req.body, presentSlotKeys);
+        if (result.error) return res.status(400).json({ error: result.error });
+        grantSections = result.sections;
+      }
+
       // Upload any newly-selected replacement files into GridFS, same as POST.
-      const bucket = getBucket();
-      const uploadedFileIds = [];
       let newDocs = [];
       try {
-        newDocs = await Promise.all(
-          (req.files || []).map(
-            (file, idx) =>
-              new Promise((resolve, reject) => {
-                const uploadStream = bucket.openUploadStream(file.originalname, {
-                  metadata: { docType: labels[idx], mimetype: file.mimetype },
-                });
-                uploadedFileIds.push(uploadStream.id);
-                Readable.from(file.buffer)
-                  .pipe(uploadStream)
-                  .on('error', reject)
-                  .on('finish', () => {
-                    resolve({
-                      docType: labels[idx],
-                      fileId: uploadStream.id,
-                      filename: file.originalname,
-                      mimetype: file.mimetype,
-                      size: file.size,
-                    });
-                  });
-              })
-          )
-        );
+        newDocs = await storeFilesInGridFS(files, labels, meta);
       } catch (uploadErr) {
-        await Promise.allSettled(uploadedFileIds.map(id => bucket.delete(id)));
         console.error('GridFS upload failed:', uploadErr);
         return res.status(500).json({ error: 'Failed to store uploaded documents. Please try again.' });
       }
 
-      // Keep whatever was already on file for any docType NOT re-uploaded
-      // this time around; swap in the new file for anything that was.
-      const replacedTypes = new Set(newDocs.map(d => d.docType));
+      // Keep whatever was already on file for any requirement NOT
+      // re-uploaded this time around; swap in the new file(s) for anything
+      // that was. Grant-form documents are matched by slotKey (a slot can
+      // hold several files), everything else by docType.
+      const docKey = d => d.slotKey || d.docType;
+      const replacedKeys = new Set(newDocs.map(docKey));
       const mergedDocs = [
-        ...existing.documents.filter(d => !replacedTypes.has(d.docType)),
+        ...existing.documents.filter(d => !replacedKeys.has(docKey(d))),
         ...newDocs,
       ];
       existing.documents = mergedDocs;
 
-      const formType = applicationFormType || existing.applicationFormType;
+      const formType = isGrant ? existing.applicationFormType : (applicationFormType || existing.applicationFormType);
       existing.applicationFormType = formType;
 
-      if (formType === 'sfag') {
+      if (isGrant) {
+        Object.assign(existing, grantSections);
+      } else if (formType === 'sfag') {
         if (personalInfo) existing.personalInfo = JSON.parse(personalInfo);
         if (contactSchool) existing.contactSchool = JSON.parse(contactSchool);
         if (parentsGuardian) existing.parentsGuardian = JSON.parse(parentsGuardian);
@@ -294,7 +382,7 @@ router.patch('/:id', (req, res) => {
 
       res.json({
         message: 'Application resubmitted successfully.',
-        application: existing,
+        application: toStudentView(existing),
       });
     } catch (err) {
       console.error('Application resubmit error:', err);
@@ -306,7 +394,9 @@ router.patch('/:id', (req, res) => {
 // GET a student's applications, by student number
 router.get('/student/:studentNumber', async (req, res) => {
   try {
-    const applications = await Application.find({ studentNumber: req.params.studentNumber }).sort({ createdAt: -1 });
+    const applications = await Application.find({ studentNumber: req.params.studentNumber })
+      .select(STUDENT_HIDDEN_FIELDS)
+      .sort({ createdAt: -1 });
     res.json({ applications });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch applications.' });
@@ -328,6 +418,8 @@ router.get('/export/scholars', requireAdmin, async (req, res) => {
     const { search = '', renewal = 'all', sort = 'recent' } = req.query;
 
     const pipeline = [
+      // Office-scoped admins (e.g. POLCA) only export their own office.
+      { $match: officeFilter(req.adminUser) },
       // Group applications by student first — everything downstream
       // (renewing/first-time, latest status, counts) is a property of the
       // student, not any single application.
@@ -377,7 +469,7 @@ router.get('/export/scholars', requireAdmin, async (req, res) => {
           studentNumber: '$_id',
           name: {
             $cond: [
-              { $eq: ['$latestApplication.applicationFormType', 'sfag'] },
+              { $in: ['$latestApplication.applicationFormType', ['sfag', 'polca', 'alumni']] },
               {
                 $concat: [
                   { $ifNull: ['$latestApplication.personalInfo.firstName', ''] },
@@ -396,28 +488,29 @@ router.get('/export/scholars', requireAdmin, async (req, res) => {
           },
           email: {
             $cond: [
-              { $eq: ['$latestApplication.applicationFormType', 'sfag'] },
-              '$latestApplication.contactSchool.email',
+              { $in: ['$latestApplication.applicationFormType', ['sfag', 'polca', 'alumni']] },
+              // Grant forms keep email with the student data instead.
+              { $ifNull: ['$latestApplication.contactSchool.email', '$latestApplication.personalInfo.email'] },
               '$latestApplication.standardInfo.email',
             ],
           },
           phone: {
             $cond: [
-              { $eq: ['$latestApplication.applicationFormType', 'sfag'] },
+              { $in: ['$latestApplication.applicationFormType', ['sfag', 'polca', 'alumni']] },
               '$latestApplication.contactSchool.mobileNo',
               '$latestApplication.standardInfo.phone',
             ],
           },
           program: {
             $cond: [
-              { $eq: ['$latestApplication.applicationFormType', 'sfag'] },
+              { $in: ['$latestApplication.applicationFormType', ['sfag', 'polca', 'alumni']] },
               '$latestApplication.personalInfo.course',
               '$latestApplication.standardInfo.program',
             ],
           },
           yearLevel: {
             $cond: [
-              { $eq: ['$latestApplication.applicationFormType', 'sfag'] },
+              { $in: ['$latestApplication.applicationFormType', ['sfag', 'polca', 'alumni']] },
               '$latestApplication.personalInfo.yearLevel',
               '$latestApplication.standardInfo.yearLevel',
             ],
@@ -559,7 +652,7 @@ router.get('/:id', async (req, res) => {
       return res.status(400).json({ error: 'Invalid application id.' });
     }
 
-    const application = await Application.findById(objectId);
+    const application = await Application.findById(objectId).select(STUDENT_HIDDEN_FIELDS);
     if (!application) {
       return res.status(404).json({ error: 'Application not found.' });
     }
@@ -578,7 +671,7 @@ router.get('/:id', async (req, res) => {
 // large; for now the frontend filters client-side over this full set.
 router.get('/', requireAdmin, async (req, res) => {
   try {
-    const filter = {};
+    const filter = { ...officeFilter(req.adminUser) };
     if (req.query.status && ALLOWED_STATUSES.includes(req.query.status)) {
       filter.status = req.query.status;
     }
@@ -641,7 +734,7 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
     // analytics (e.g. revision-cycle counts) key off status values that
     // are only meaningful if every decision, including note-only saves,
     // shows up here consistently.
-    const application = await Application.findById(objectId);
+    const application = await Application.findOne({ _id: objectId, ...officeFilter(req.adminUser) });
     if (!application) {
       return res.status(404).json({ error: 'Application not found.' });
     }
@@ -666,6 +759,56 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('Admin update status error:', err);
     res.status(500).json({ error: 'Failed to update application status.' });
+  }
+});
+
+// PATCH /api/applications/:id/admin-fields — admin-only. Saves the POLCA
+// form's office-use box (Date Received, Received By, New/Old applicant,
+// GPA). Only POLCA applications have these fields. Send null/'' to clear
+// a field.
+router.patch('/:id/admin-fields', requireAdmin, async (req, res) => {
+  try {
+    let objectId;
+    try {
+      objectId = new ObjectId(req.params.id);
+    } catch {
+      return res.status(400).json({ error: 'Invalid application id.' });
+    }
+
+    const application = await Application.findOne({ _id: objectId, ...officeFilter(req.adminUser) });
+    if (!application) {
+      return res.status(404).json({ error: 'Application not found.' });
+    }
+    if (application.applicationFormType !== 'polca') {
+      return res.status(400).json({ error: 'Office-use fields only apply to POLCA applications.' });
+    }
+
+    const { dateReceived, receivedBy, applicantType, gpa } = req.body || {};
+    const next = {};
+
+    if (dateReceived) {
+      const parsed = new Date(dateReceived);
+      if (Number.isNaN(parsed.getTime())) return res.status(400).json({ error: 'Invalid date received.' });
+      next.dateReceived = parsed;
+    }
+    if (typeof receivedBy === 'string' && receivedBy.trim()) next.receivedBy = receivedBy.trim();
+    if (applicantType) {
+      if (!['New', 'Old'].includes(applicantType)) return res.status(400).json({ error: 'Applicant type must be New or Old.' });
+      next.applicantType = applicantType;
+    }
+    if (gpa !== undefined && gpa !== null && gpa !== '') {
+      const parsed = Number(gpa);
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 5) return res.status(400).json({ error: 'GPA must be a number between 0 and 5.' });
+      next.gpa = parsed;
+    }
+
+    application.adminFields = { ...next, updatedBy: req.adminUser.email, updatedAt: new Date() };
+    await application.save();
+
+    res.json({ application });
+  } catch (err) {
+    console.error('Admin update office fields error:', err);
+    res.status(500).json({ error: 'Failed to save office-use fields.' });
   }
 });
 

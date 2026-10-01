@@ -17,6 +17,7 @@ Mounted in [server.js](D:/AniSkolar/AniSkolar_Backend/server.js):
 - `GET /` (health check)
 - `/api/students`
 - `/api/applications`
+- `/api/application-drafts` (saved-for-later grant application drafts)
 
 ## Requirements
 
@@ -63,6 +64,23 @@ AniSkolar_Backend/
 ├── utils/
 ├── server.js
 └── test-connection.js
+```
+
+## Scholarship Offices
+
+Each scholarship in `data/scholarships.js` belongs to an office (`LSO`, `POLCA`, `ALUMNI`), and each application stores that office. To give an admin access to only one office's applications, set their Clerk public metadata to:
+
+```json
+{ "role": "admin", "office": "POLCA" }
+```
+
+Admins with no `office` (or `"LSO"`) see every office, as before.
+
+After deploying, tag existing applications with their office once:
+
+```bash
+node backfillApplicationOffice.js --dry-run
+node backfillApplicationOffice.js
 ```
 
 ## Notes
