@@ -31,8 +31,8 @@ const ALUMNI_INSTITUTIONS = ['DLSU-EAC', 'DLSU-Aguinaldo', 'DLSU-Dasmariñas'];
 const ALUMNI_RELATIONSHIPS = ['Parent', 'Sibling', 'Grandparent', 'Grandchild'];
 
 const SCHOLARSHIPS = [
-  { id: 's1', name: 'Student Financial Aid (SFA) Grant', office: 'LSO', formType: 'sfag' },
-  { id: 's2', name: 'Entrance Scholarship', office: 'LSO', formType: 'standard' },
+  { id: 's1', name: 'Student Financial Aid (SFA) Grant', office: 'LSO', formType: 'sfag', referencePrefix: 'DLSU-D-SFAG' },
+  { id: 's2', name: 'Entrance Scholarship', office: 'LSO', formType: 'standard', referencePrefix: 'DLSU-D-ENTRANCE' },
   {
     id: 's3',
     name: 'POLCA Scholarship (PSEF)',

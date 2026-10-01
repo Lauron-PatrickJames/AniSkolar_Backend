@@ -183,7 +183,7 @@ router.post('/', (req, res) => {
         office: scholarship.office,
         applicationFormType: formType,
         documents,
-        referenceCode: `${scholarship.referencePrefix || 'DLSU-D-SFAG'}-${Math.floor(Math.random() * 900000 + 100000)}`,
+        referenceCode: `${scholarship.referencePrefix || 'DLSU-D'}-${Math.floor(Math.random() * 900000 + 100000)}`,
         // First lifecycle event. changedBy is always 'student' here since
         // this route only ever runs for the applicant's own submission.
         history: [{ status: 'Submitted', changedBy: 'student', changedAt: new Date() }],
