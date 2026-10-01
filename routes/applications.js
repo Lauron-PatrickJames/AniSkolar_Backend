@@ -9,7 +9,7 @@ const { getBucket } = require('../utils/gridfs');
 const Application = require('../models/Application');
 const ApplicationDraft = require('../models/ApplicationDraft');
 const { findScholarship } = require('../data/scholarships');
-const { officeFilter } = require('../utils/officeScope');
+const { officeFilter, scopedOffice } = require('../utils/officeScope');
 const {
   isGrantFormType,
   parseGrantSections,
@@ -740,6 +740,7 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
     }
 
     application.status = status;
+    application.decisionOffice = req.adminUser.office || 'LSO';
     application.reviewNote = reviewNote || undefined;
     application.reviewedBy = req.adminUser.email;
     application.reviewedAt = new Date();
@@ -759,6 +760,55 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('Admin update status error:', err);
     res.status(500).json({ error: 'Failed to update application status.' });
+  }
+});
+
+// POST /api/applications/forward — office admins only (POLCA / ALUMNI).
+// Sends every one of the office's applications that hasn't been sent yet
+// to the LSO, whatever its status, as one batch. Applications submitted
+// afterwards stay with the office until its next send. The office keeps
+// reviewing sent applications; its decision stands unless the LSO
+// overrides it (PATCH /:id/status records which office decided).
+router.post('/forward', requireAdmin, async (req, res) => {
+  try {
+    const office = scopedOffice(req.adminUser);
+    if (!office) {
+      return res.status(400).json({ error: 'Only POLCA and Alumni office admins send applications to the LSO.' });
+    }
+
+    const pending = { office, forwardedAt: null };
+    const byStatus = await Application.aggregate([
+      { $match: pending },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]);
+    const total = byStatus.reduce((sum, s) => sum + s.count, 0);
+    if (total === 0) {
+      return res.status(400).json({ error: 'There are no new applications to send.' });
+    }
+
+    const forwardedAt = new Date();
+    const forwardBatchId = `${office}-${forwardedAt.getTime()}`;
+    const result = await Application.updateMany(pending, {
+      $set: { forwardedAt, forwardedBy: req.adminUser.email, forwardBatchId },
+      $push: {
+        history: {
+          status: 'Forwarded to LSO',
+          note: `Sent by the ${office} office`,
+          changedBy: req.adminUser.email,
+          changedAt: forwardedAt,
+        },
+      },
+    });
+
+    res.json({
+      forwarded: result.modifiedCount,
+      byStatus: Object.fromEntries(byStatus.map(s => [s._id, s.count])),
+      forwardBatchId,
+      forwardedAt,
+    });
+  } catch (err) {
+    console.error('Forward to LSO error:', err);
+    res.status(500).json({ error: 'Failed to send applications to the LSO.' });
   }
 });
 
