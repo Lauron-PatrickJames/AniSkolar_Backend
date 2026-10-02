@@ -2,9 +2,10 @@
 // academicCycles() in the frontend's src/pages/admin/adminData.ts — keep the
 // two in sync.
 //
-// Philippine academic-year convention: June through May, in Philippine
-// time. A submission in March 2026 falls in AY 2025–2026; one in September
-// 2026 in AY 2026–2027.
+// DLSU-D's academic year starts in August, but scholarship applications
+// (Entrance, SFA Grant) open June 1–20 for the coming year, so a cycle runs
+// June through May, in Philippine time: an application in June 2026 belongs
+// to AY 2026–2027; one in March 2026 to AY 2025–2026.
 
 const ACADEMIC_YEAR_START_MONTH = 6; // June (1-based, as MongoDB's $month returns)
 const TIMEZONE = 'Asia/Manila';
