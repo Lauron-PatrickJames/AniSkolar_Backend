@@ -83,7 +83,7 @@ function describeGraphError(err) {
     return 'The Facebook Page access token has expired or is no longer valid. Generate a new long-lived Page access token and update FB_PAGE_ACCESS_TOKEN on the server, then retry.';
   }
   if (code === 10 || code === 200 || (typeof code === 'number' && code > 200 && code < 300)) {
-    return 'Facebook refused the request: the Page access token is missing the pages_manage_posts permission, or the app isn\'t allowed to post to this Page yet.';
+    return `Facebook refused the request: the Page access token is missing the pages_manage_posts permission, or the app isn't allowed to post to this Page yet. Check that FB_PAGE_ACCESS_TOKEN is the Page's own token (Access Token Debugger → Type: Page).${facebookSays(err)}`;
   }
   if (code === 4 || code === 17 || code === 32 || code === 613) {
     return 'Facebook is rate-limiting requests from this app. Wait a few minutes, then retry.';
@@ -95,6 +95,12 @@ function describeGraphError(err) {
     return 'The Facebook post no longer exists or can\'t be edited by this app.';
   }
   return `Facebook returned an error: ${err?.message || 'unknown error'}`;
+}
+
+// Facebook's own wording, appended to our explanations to help diagnose
+// setup problems. Graph error messages never include the access token.
+function facebookSays(err) {
+  return err?.message ? ` (Facebook: "${err.message}")` : '';
 }
 
 /**
