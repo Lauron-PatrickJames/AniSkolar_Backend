@@ -54,4 +54,14 @@ async function requireAdmin(req, res, next) {
   }
 }
 
-module.exports = { requireAdmin, ADMIN_OFFICES };
+// AdSO admins only (office 'ADSO' in Clerk, stored as 'LSO'). Used for
+// features that belong to the AdSO alone, like announcements.
+function requireAdsoOnly(req, res, next) {
+  if (req.adminUser?.office !== 'LSO') {
+    return res.status(403).json({ error: 'Only the Admissions and Scholarship Office (AdSO) can do this.' });
+  }
+  next();
+}
+const requireAdso = [requireAdmin, requireAdsoOnly];
+
+module.exports = { requireAdmin, requireAdso, ADMIN_OFFICES };
