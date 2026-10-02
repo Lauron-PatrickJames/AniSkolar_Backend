@@ -56,7 +56,31 @@ const announcementSchema = new mongoose.Schema(
     createdBy: {
       type: String, // Clerk user id or admin display name
       required: true
-    }
+    },
+
+    // Optional single image, stored in GridFS (same bucket as application
+    // documents) and served by GET /api/announcements/:id/image.
+    imageFileId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    imageFilename: String,
+    imageMimetype: String,
+
+    // --- Facebook Page cross-post (services/facebook.js) -------------------
+    // fbEnabled is the admin's choice ("Also post to Facebook"). The post
+    // exists on the Page while the announcement is published and fbEnabled.
+    fbEnabled: { type: Boolean, default: false },
+    fbPostId: { type: String, default: null },
+    fbPermalink: { type: String, default: null },
+    fbStatus: {
+      type: String,
+      enum: ['not_posted', 'posted', 'failed'],
+      default: 'not_posted'
+    },
+    fbError: { type: String, default: null },
+    fbLastSyncedAt: { type: Date, default: null },
+    // What's currently on Facebook, so edits only call the API when the
+    // post text or image actually changed. Internal; never sent to clients.
+    fbMessage: { type: String, default: null },
+    fbImageFileId: { type: mongoose.Schema.Types.ObjectId, default: null }
   },
   { timestamps: true }
 );
@@ -89,7 +113,29 @@ announcementSchema.methods.toClientShape = function toClientShape() {
     publishedAt: this.publishedAt,
     createdBy: this.createdBy,
     createdAt: this.createdAt,
-    updatedAt: this.updatedAt
+    updatedAt: this.updatedAt,
+    imageUrl: this.imageFileId ? `/api/announcements/${this._id}/image` : null,
+    fbEnabled: this.fbEnabled,
+    fbStatus: this.fbStatus,
+    fbPostId: this.fbPostId,
+    fbPermalink: this.fbPermalink,
+    fbError: this.fbError,
+    fbLastSyncedAt: this.fbLastSyncedAt
+  };
+};
+
+// Student feed shape: the frontend Announcement type plus the image and,
+// when it's live on the Page, the Facebook link. No admin-only fields.
+announcementSchema.methods.toFeedShape = function toFeedShape() {
+  return {
+    id: this._id.toString(),
+    title: this.title,
+    date: formatDisplayDate(this.publishedAt || this.createdAt),
+    description: this.description,
+    content: this.content,
+    category: this.category,
+    imageUrl: this.imageFileId ? `/api/announcements/${this._id}/image` : null,
+    fbPermalink: this.fbPostId ? this.fbPermalink : null
   };
 };
 
