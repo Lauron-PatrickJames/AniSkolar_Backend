@@ -8,7 +8,16 @@ const studentSchema = new mongoose.Schema({
     // real identity anchor. Everything else here is academic profile data
     // Clerk itself has no concept of.
     clerkId: { type: String, required: true, unique: true, index: true },
+    // Full display name, composed from the parts below.
     name: { type: String, required: true },
+    // Name parts, kept separately and never split from `name`: first and
+    // last come from the Clerk profile (Microsoft sign-in), the middle name
+    // is entered by the student. Older records may lack them until
+    // scripts/backfill-student-names.js is run (GET /me fills them from
+    // Clerk in the meantime).
+    firstName: { type: String, trim: true },
+    middleName: { type: String, trim: true },
+    lastName: { type: String, trim: true },
     course: String,
     college: String,
     yearLevel: String,
