@@ -8,6 +8,7 @@ const { requireAdmin } = require('../middleware/requireAdmin');
 const { getBucket } = require('../utils/gridfs');
 const Application = require('../models/Application');
 const ApplicationDraft = require('../models/ApplicationDraft');
+const ScholarshipSetting = require('../models/ScholarshipSetting');
 const { findScholarship } = require('../data/scholarships');
 const { officeFilter, scopedOffice } = require('../utils/officeScope');
 const {
@@ -134,6 +135,12 @@ router.post('/', (req, res) => {
       const scholarship = findScholarship(scholarshipId);
       if (!scholarship) {
         return res.status(400).json({ error: 'Unknown scholarship.' });
+      }
+
+      // The AdSO can close a scholarship from the admin Scholarships page.
+      const setting = await ScholarshipSetting.findOne({ scholarshipId }).select('status').lean();
+      if (setting?.status === 'Closed') {
+        return res.status(400).json({ error: 'This scholarship is closed and is no longer accepting applications.' });
       }
 
       if (!req.files || req.files.length === 0) {
