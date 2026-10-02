@@ -20,11 +20,13 @@ const scholarshipSettingSchema = new mongoose.Schema({
   eligibility: listField,
   process: listField,
   submissionNote: { type: String, trim: true, maxlength: 500 },
+  // e.g. the Athletic Scholarship's varsity tryout dates.
+  schedule: { type: String, trim: true, maxlength: 300 },
   updatedBy: String,
 }, { timestamps: true });
 
 // The fields a client can read and the admin page can edit.
-const EDITABLE_FIELDS = ['status', 'deadline', 'description', 'benefits', 'eligibility', 'process', 'submissionNote'];
+const EDITABLE_FIELDS = ['status', 'deadline', 'description', 'benefits', 'eligibility', 'process', 'submissionNote', 'schedule'];
 
 scholarshipSettingSchema.methods.toOverrides = function toOverrides() {
   const out = { id: this.scholarshipId };

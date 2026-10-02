@@ -17,7 +17,7 @@ const { requireAdso } = require('../middleware/requireAdmin');
 
 const { STATUSES } = ScholarshipSetting;
 const LIST_FIELDS = ['benefits', 'eligibility', 'process'];
-const TEXT_LIMITS = { deadline: 200, description: 4000, submissionNote: 500 };
+const TEXT_LIMITS = { deadline: 200, description: 4000, submissionNote: 500, schedule: 300 };
 const LIST_ITEM_LIMIT = 1000;
 const LIST_MAX_ITEMS = 30;
 
