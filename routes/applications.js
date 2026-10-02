@@ -768,7 +768,8 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
     });
 
     // An office (POLCA / Alumni) approving one of its applications sends it
-    // to the LSO right away, instead of waiting for the next "Send to LSO".
+    // to the AdSO ('LSO') right away. This is the only way an office
+    // application reaches the AdSO — there is no manual send.
     if (office && status === 'Approved' && !application.forwardedAt) {
       application.forwardedAt = application.reviewedAt;
       application.forwardedBy = req.adminUser.email;
@@ -799,58 +800,6 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('Admin update status error:', err);
     res.status(500).json({ error: 'Failed to update application status.' });
-  }
-});
-
-// POST /api/applications/forward — office admins only (POLCA / ALUMNI).
-// Sends every one of the office's applications that hasn't been sent yet
-// to the LSO, whatever its status, as one batch. Applications submitted
-// afterwards stay with the office until its next send. The office keeps
-// reviewing sent applications; its decision stands unless the LSO
-// overrides it (PATCH /:id/status records which office decided).
-// Approving an application already sends it on its own (see
-// PATCH /:id/status), so this mainly covers the other statuses.
-router.post('/forward', requireAdmin, async (req, res) => {
-  try {
-    const office = scopedOffice(req.adminUser);
-    if (!office) {
-      return res.status(400).json({ error: 'Only POLCA and Alumni office admins send applications to the AdSO.' });
-    }
-
-    // Mark the batch first, then count what this batch actually contains,
-    // so the reported totals always match what was sent — even if a new
-    // submission or an auto-forward (approval) lands at the same time.
-    const forwardedAt = new Date();
-    const forwardBatchId = `${office}-${forwardedAt.getTime()}`;
-    const result = await Application.updateMany({ office, forwardedAt: null }, {
-      $set: { forwardedAt, forwardedBy: req.adminUser.email, forwardBatchId },
-      $push: {
-        history: {
-          status: 'Forwarded to LSO',
-          note: `Sent by the ${office} office`,
-          changedBy: req.adminUser.email,
-          changedAt: forwardedAt,
-        },
-      },
-    });
-
-    if (result.modifiedCount === 0) {
-      return res.status(400).json({ error: 'There are no new applications to send.' });
-    }
-    const byStatus = await Application.aggregate([
-      { $match: { forwardBatchId } },
-      { $group: { _id: '$status', count: { $sum: 1 } } },
-    ]);
-
-    res.json({
-      forwarded: result.modifiedCount,
-      byStatus: Object.fromEntries(byStatus.map(s => [s._id, s.count])),
-      forwardBatchId,
-      forwardedAt,
-    });
-  } catch (err) {
-    console.error('Forward to LSO error:', err);
-    res.status(500).json({ error: 'Failed to send applications to the AdSO.' });
   }
 });
 

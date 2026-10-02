@@ -97,12 +97,13 @@ const applicationSchema = new mongoose.Schema({
 
   adminFields: { type: adminFieldsSchema },
 
-  // Set when a POLCA / Alumni office sends its applications to the LSO
-  // (POST /api/applications/forward). Until then the LSO can't see them;
-  // see utils/officeScope.js. Always unset for LSO's own applications.
+  // Set when a POLCA / Alumni office approves the application, which sends
+  // it to the AdSO ('LSO') automatically (PATCH /api/applications/:id/status).
+  // Until then the AdSO can't see it; see utils/officeScope.js. Always unset
+  // for the AdSO's own applications.
   forwardedAt: { type: Date, default: null },
-  forwardedBy: String,          // office admin's email
-  forwardBatchId: String,       // groups everything sent in one "Send to LSO"
+  forwardedBy: String,          // office admin who approved it
+  forwardBatchId: String,       // id of the send (one per approval)
 
   // Which office recorded the current status ('LSO', 'POLCA', 'ALUMNI').
   // The office's decision stands unless the LSO changes it, so an office

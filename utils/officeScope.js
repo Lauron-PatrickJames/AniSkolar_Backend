@@ -4,9 +4,10 @@
 //
 // - POLCA / ALUMNI admins see every application tagged with their office,
 //   and nothing else.
-// - The AdSO ('LSO') sees its own applications plus whatever the other
-//   offices have sent over with POST /api/applications/forward. Office
-//   applications that haven't been sent yet stay with that office.
+// - The AdSO ('LSO') sees its own applications plus every office
+//   application that office has approved (approving sends it over
+//   automatically; see PATCH /api/applications/:id/status). Office
+//   applications that haven't been approved stay with that office.
 // - An admin without an office matches nothing (fails closed);
 //   requireAdmin already refuses them, this is a second line of defence.
 
