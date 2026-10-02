@@ -15,7 +15,7 @@
 //
 // applicationMode: 'online' (default) accepts applications through
 // AniSkolar. 'info' scholarships are listed for information only: they are
-// awarded by nomination, ranking or recruitment, or are externally funded,
+// awarded by nomination, ranking or recruitment,
 // so POST /api/applications refuses them.
 //
 // For the grant-form scholarships (applicationFormType 'polca' / 'alumni'):
@@ -94,7 +94,6 @@ const SCHOLARSHIPS = [
   { id: 's8', name: 'Vicissitude Scholarship Program', office: 'LSO', applicationMode: 'info' },
   { id: 's9', name: 'Performing Arts Group (PAG) Scholarship', office: 'LSO', applicationMode: 'info' },
   { id: 's10', name: '267th NROTC Scholarship', office: 'LSO', applicationMode: 'info' },
-  { id: 's11', name: 'KALINGA Scholarship Initiatives', office: 'LSO', applicationMode: 'info' },
 ];
 
 function findScholarship(scholarshipId) {
