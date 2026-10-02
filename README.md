@@ -78,7 +78,7 @@ Each scholarship in `data/scholarships.js` belongs to an office (`LSO` = AdSO, `
 
 Applications store the AdSO as the office code `LSO` (its code before the rename), so no data migration is needed.
 
-When a POLCA or Alumni admin **approves** an application, it's sent to the AdSO automatically. For everything else, they click **Send to AdSO** (`POST /api/applications/forward`). That sends every application the office hasn't sent yet, whatever its status. Applications submitted later stay with the office until its next send. The office's decision stands, but the AdSO can override it; the dashboard labels overrides, and once the AdSO overrides, the office can no longer change that application's status or note.
+When a POLCA or Alumni admin **approves** an application, it's sent to the AdSO automatically — there's no manual send, so approved students reach the AdSO with no delay. Applications the office hasn't approved (under evaluation, needs revision, rejected) stay with the office. The office's decision stands, but the AdSO can override it; the dashboard labels overrides, and once the AdSO overrides, the office can no longer change that application's status or note.
 
 After deploying, tag existing applications with their office once:
 
