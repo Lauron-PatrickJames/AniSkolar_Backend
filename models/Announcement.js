@@ -49,6 +49,13 @@ const announcementSchema = new mongoose.Schema(
       type: Boolean,
       default: false
     },
+    // Optional: the scholarship this announcement is about (an id from
+    // data/scholarships.js). It also shows on that scholarship's page, e.g.
+    // varsity tryout dates on the Athletic Scholarship.
+    scholarshipId: {
+      type: String,
+      default: null
+    },
     publishedAt: {
       type: Date,
       default: null
@@ -106,6 +113,7 @@ announcementSchema.methods.toClientShape = function toClientShape() {
     description: this.description,
     content: this.content,
     category: this.category,
+    scholarshipId: this.scholarshipId || null,
     // Admin extensions — present for the admin dashboard, harmless extra
     // keys for the student portal.
     status: this.status,
@@ -134,6 +142,7 @@ announcementSchema.methods.toFeedShape = function toFeedShape() {
     description: this.description,
     content: this.content,
     category: this.category,
+    scholarshipId: this.scholarshipId || null,
     imageUrl: this.imageFileId ? `/api/announcements/${this._id}/image` : null,
     fbPermalink: this.fbPostId ? this.fbPermalink : null
   };
