@@ -12,6 +12,7 @@ const ScholarshipSetting = require('../models/ScholarshipSetting');
 const { findScholarship, acceptsOnlineApplications } = require('../data/scholarships');
 const { officeFilter, scopedOffice } = require('../utils/officeScope');
 const { academicYearStartExpr } = require('../utils/academicYear');
+const { nextReferenceCode } = require('../utils/referenceCode');
 const {
   isGrantFormType,
   parseGrantSections,
@@ -34,11 +35,31 @@ const MAX_DOCUMENT_FILES = 25;
 const uploadDocs = applicationUpload.array('documents', MAX_DOCUMENT_FILES);
 
 // Office-internal fields never leave the server on student-facing routes.
-const STUDENT_HIDDEN_FIELDS = '-adminFields';
+// Aggregation expression: joins name parts (an array expression) with
+// single spaces, skipping missing or blank parts.
+function joinNameParts(partsExpr) {
+  return {
+    $reduce: {
+      input: {
+        $filter: {
+          input: { $map: { input: partsExpr, as: 'p', in: { $trim: { input: { $ifNull: ['$$p', ''] } } } } },
+          as: 'p',
+          cond: { $ne: ['$$p', ''] },
+        },
+      },
+      initialValue: '',
+      in: { $cond: [{ $eq: ['$$value', ''] }, '$$this', { $concat: ['$$value', ' ', '$$this'] }] },
+    },
+  };
+}
+
+// Office-use data that applicants never see.
+const STUDENT_HIDDEN_FIELDS = '-adminFields -internalNotes';
 
 function toStudentView(application) {
   const obj = application.toObject ? application.toObject() : { ...application };
   delete obj.adminFields;
+  delete obj.internalNotes;
   return obj;
 }
 
@@ -194,7 +215,7 @@ router.post('/', (req, res) => {
         office: scholarship.office,
         applicationFormType: formType,
         documents,
-        referenceCode: `${scholarship.referencePrefix || 'DLSU-D'}-${Math.floor(Math.random() * 900000 + 100000)}`,
+        referenceCode: await nextReferenceCode(scholarship),
         // First lifecycle event. changedBy is always 'student' here since
         // this route only ever runs for the applicant's own submission.
         history: [{ status: 'Submitted', changedBy: 'student', changedAt: new Date() }],
@@ -483,25 +504,23 @@ router.get('/export/scholars', requireAdmin, async (req, res) => {
       {
         $addFields: {
           studentNumber: '$_id',
-          name: {
+          // First, middle and last name joined with single spaces (the
+          // middle part is middleName, or the SFA form's middle initial).
+          name: joinNameParts({
             $cond: [
               { $in: ['$latestApplication.applicationFormType', ['sfag', 'polca', 'alumni']] },
-              {
-                $concat: [
-                  { $ifNull: ['$latestApplication.personalInfo.firstName', ''] },
-                  ' ',
-                  { $ifNull: ['$latestApplication.personalInfo.lastName', ''] },
-                ],
-              },
-              {
-                $concat: [
-                  { $ifNull: ['$latestApplication.standardInfo.firstName', ''] },
-                  ' ',
-                  { $ifNull: ['$latestApplication.standardInfo.lastName', ''] },
-                ],
-              },
+              [
+                '$latestApplication.personalInfo.firstName',
+                { $ifNull: ['$latestApplication.personalInfo.middleName', '$latestApplication.personalInfo.middleInitial'] },
+                '$latestApplication.personalInfo.lastName',
+              ],
+              [
+                '$latestApplication.standardInfo.firstName',
+                '$latestApplication.standardInfo.middleName',
+                '$latestApplication.standardInfo.lastName',
+              ],
             ],
-          },
+          }),
           email: {
             $cond: [
               { $in: ['$latestApplication.applicationFormType', ['sfag', 'polca', 'alumni']] },
@@ -766,6 +785,20 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
       return res.status(409).json({ error: 'The AdSO has overridden this decision, so it can no longer be changed by your office.' });
     }
 
+    // The applicant sees the message, so a decision that asks something
+    // of them or turns them down must explain itself, and so must changing
+    // a decision that was already made. Approving from review needs none.
+    // (A note-only save re-sends the current status and is unaffected.)
+    const note = typeof reviewNote === 'string' ? reviewNote.trim() : '';
+    if (status !== application.status && !note) {
+      if (status === 'Needs Revision' || status === 'Rejected') {
+        return res.status(400).json({ error: 'Add a message to the applicant explaining what to do or why.' });
+      }
+      if (['Approved', 'Rejected', 'Needs Revision'].includes(application.status)) {
+        return res.status(400).json({ error: 'Add a message to the applicant explaining why the decision changed.' });
+      }
+    }
+
     // Only a real status change records who decided. "Save note only"
     // re-sends the current status and must not turn into (or erase) an
     // LSO override.
@@ -823,6 +856,40 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('Admin update status error:', err);
     res.status(500).json({ error: 'Failed to update application status.' });
+  }
+});
+
+// POST /api/applications/:id/internal-notes — admin-only. Adds a staff-only
+// note ({ text }) that is never shown to the applicant and doesn't touch
+// the status or the applicant-facing message.
+router.post('/:id/internal-notes', requireAdmin, async (req, res) => {
+  try {
+    let objectId;
+    try {
+      objectId = new ObjectId(req.params.id);
+    } catch {
+      return res.status(400).json({ error: 'Invalid application id.' });
+    }
+    const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+    if (!text) return res.status(400).json({ error: 'Write a note first.' });
+    if (text.length > 2000) return res.status(400).json({ error: 'Internal notes can be at most 2000 characters.' });
+
+    const application = await Application.findOne({ _id: objectId, ...officeFilter(req.adminUser) });
+    if (!application) return res.status(404).json({ error: 'Application not found.' });
+
+    if (!Array.isArray(application.internalNotes)) application.internalNotes = [];
+    application.internalNotes.push({
+      text,
+      by: req.adminUser.email,
+      byName: req.adminUser.name,
+      office: req.adminUser.office,
+      at: new Date(),
+    });
+    await application.save();
+    res.status(201).json({ internalNotes: application.internalNotes });
+  } catch (err) {
+    console.error('Add internal note error:', err);
+    res.status(500).json({ error: 'Failed to save the internal note.' });
   }
 });
 

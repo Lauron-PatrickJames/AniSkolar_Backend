@@ -9,6 +9,8 @@ const ALLOWED_EMAIL_DOMAIN = '@dlsud.edu.ph';
 // name, and email are deliberately excluded — those are identity fields
 // tied to Clerk/verification, not editable profile data.
 const EDITABLE_FIELDS = [
+  // The middle name is the student's to enter; first/last come from Clerk.
+  'middleName',
   'course', 'college', 'yearLevel', 'gpa',
   'programCode', 'section', 'dateOfBirth', 'nationality', 'placeOfBirth', 'civilStatus',
   'homeAddress', 'cityMunicipality', 'province', 'zipCode', 'country',
@@ -52,6 +54,19 @@ function sanitizeProfileFields(body) {
   return { data };
 }
 
+// First and last name exactly as Clerk has them. Never split a full-name
+// string: "Patrick James" + "Lauron" must not become "Patrick" + "James Lauron".
+function nameParts(clerkUser) {
+  return {
+    firstName: (clerkUser.firstName || '').trim() || undefined,
+    lastName: (clerkUser.lastName || '').trim() || undefined,
+  };
+}
+
+function fullName({ firstName, middleName, lastName }) {
+  return [firstName, middleName, lastName].map(p => (p || '').trim()).filter(Boolean).join(' ');
+}
+
 // GET /api/students/me
 // Returns the Student record linked to the caller's Clerk account, or 404
 // if they've signed in with Clerk but never completed their academic
@@ -74,6 +89,16 @@ router.get('/me', async (req, res) => {
     const student = await Student.findOne({ clerkId: userId });
     if (!student) {
       return res.status(404).json({ error: 'Profile not yet completed.' });
+    }
+    // Records created before name parts were stored: answer with Clerk's
+    // first/last name (not saved; the backfill script does that).
+    if (!student.firstName && !student.lastName) {
+      try {
+        const clerkUser = await clerkClient.users.getUser(userId);
+        return res.json({ student: { ...student.toObject(), ...nameParts(clerkUser) } });
+      } catch (clerkErr) {
+        console.error('Name lookup skipped:', clerkErr);
+      }
     }
     res.json({ student });
   } catch (err) {
@@ -126,10 +151,12 @@ router.post('/complete-profile', async (req, res) => {
       return res.status(400).json({ error });
     }
 
+    const names = { ...nameParts(clerkUser), middleName: data.middleName || undefined };
     const student = await Student.create({
       clerkId: userId,
       studentNumber,
-      name: `${clerkUser.firstName || ''} ${clerkUser.lastName || ''}`.trim() || 'Student',
+      ...names,
+      name: fullName(names) || 'Student',
       email: primaryEmail.toLowerCase(),
       avatarUrl: clerkUser.imageUrl || undefined,
       ...data,
@@ -164,6 +191,11 @@ router.patch('/me', async (req, res) => {
     }
 
     Object.assign(student, data);
+    // A changed middle name updates the full name, as long as the record
+    // has its first/last parts (older records keep their name until backfilled).
+    if (data.middleName !== undefined && (student.firstName || student.lastName)) {
+      student.name = fullName(student) || student.name;
+    }
 
     // Keep the avatar synced with whatever Clerk/Microsoft currently has
     // on file — a no-op fetch cost if it hasn't changed, but means a

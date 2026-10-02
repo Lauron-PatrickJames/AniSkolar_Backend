@@ -134,6 +134,20 @@ const applicationSchema = new mongoose.Schema({
   // array — consumers (e.g. AdminAnalytics, ApplicationTimeline) already
   // handle that by falling back to current status.
   history: { type: [historyEntrySchema], default: [] },
+
+  // Staff-only notes (POST /:id/internal-notes). Never shown to the
+  // applicant: stripped from every student-facing response
+  // (STUDENT_HIDDEN_FIELDS in routes/applications.js).
+  internalNotes: {
+    type: [new mongoose.Schema({
+      text: { type: String, required: true, trim: true, maxlength: 2000 },
+      by: String,          // admin email
+      byName: String,      // admin display name
+      office: String,      // office code ('LSO', 'POLCA', 'ALUMNI')
+      at: { type: Date, default: Date.now },
+    }, { _id: false })],
+    default: [],
+  },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Application', applicationSchema);

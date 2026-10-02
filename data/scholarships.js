@@ -18,6 +18,9 @@
 // awarded by nomination, ranking or recruitment,
 // so POST /api/applications refuses them.
 //
+// referenceCode: the short code that starts each new application's
+// reference number (utils/referenceCode.js), e.g. 'ENT' → ENT-2026-0001.
+//
 // For the grant-form scholarships (applicationFormType 'polca' / 'alumni'):
 //   - eligibility: the rules checked at apply time (utils/grantForms.js).
 //     Retention rules (GPA, no failing grades, unit load, good moral) are
@@ -35,14 +38,14 @@ const ALUMNI_INSTITUTIONS = ['DLSU-EAC', 'DLSU-Aguinaldo', 'DLSU-Dasmariñas'];
 const ALUMNI_RELATIONSHIPS = ['Parent', 'Sibling', 'Grandparent', 'Grandchild'];
 
 const SCHOLARSHIPS = [
-  { id: 's1', name: 'Student Financial Aid (SFA) Grant', office: 'LSO', formType: 'sfag', referencePrefix: 'DLSU-D-SFAG' },
-  { id: 's2', name: 'Entrance Scholarship', office: 'LSO', formType: 'standard', referencePrefix: 'DLSU-D-ENTRANCE' },
+  { id: 's1', name: 'Student Financial Aid (SFA) Grant', office: 'LSO', formType: 'sfag', referenceCode: 'SFA' },
+  { id: 's2', name: 'Entrance Scholarship', office: 'LSO', formType: 'standard', referenceCode: 'ENT' },
   {
     id: 's3',
     name: 'POLCA Scholarship (PSEF)',
     office: 'POLCA',
     formType: 'polca',
-    referencePrefix: 'POLCA-PSEF',
+    referenceCode: 'PSEF',
     eligibility: {
       minHsGeneralAverage: 85,
       // "No grade in the 70s" — every HS subject grade must be at least 80.
@@ -69,7 +72,7 @@ const SCHOLARSHIPS = [
     name: 'DLSU-D Alumni Association Scholarship',
     office: 'ALUMNI',
     formType: 'alumni',
-    referencePrefix: 'DLSUD-AA',
+    referenceCode: 'DAA',
     eligibility: {
       alumniInstitutions: ALUMNI_INSTITUTIONS,
       alumniRelationships: ALUMNI_RELATIONSHIPS,
@@ -89,7 +92,7 @@ const SCHOLARSHIPS = [
     ],
   },
   { id: 's5', name: 'Academic Scholarship', office: 'LSO', applicationMode: 'info' },
-  { id: 's6', name: 'Employee Benefit Privilege Scholarship Program (EBPSP)', office: 'LSO', formType: 'standard', referencePrefix: 'DLSU-D-EBPSP' },
+  { id: 's6', name: 'Employee Benefit Privilege Scholarship Program (EBPSP)', office: 'LSO', formType: 'standard', referenceCode: 'EBPSP' },
   { id: 's7', name: 'Athletic Scholarship', office: 'LSO', applicationMode: 'info' },
   { id: 's8', name: 'Vicissitude Scholarship Program', office: 'LSO', applicationMode: 'info' },
   { id: 's9', name: 'Performing Arts Group (PAG) Scholarship', office: 'LSO', applicationMode: 'info' },
