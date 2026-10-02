@@ -13,6 +13,11 @@
 // (ADSO, POLCA or ALUMNI); see middleware/requireAdmin.js and
 // utils/officeScope.js for who sees what.
 //
+// applicationMode: 'online' (default) accepts applications through
+// AniSkolar. 'info' scholarships are listed for information only: they are
+// awarded by nomination, ranking or recruitment, or are externally funded,
+// so POST /api/applications refuses them.
+//
 // For the grant-form scholarships (applicationFormType 'polca' / 'alumni'):
 //   - eligibility: the rules checked at apply time (utils/grantForms.js).
 //     Retention rules (GPA, no failing grades, unit load, good moral) are
@@ -83,10 +88,21 @@ const SCHOLARSHIPS = [
       { key: 'proofOfRelation' },
     ],
   },
+  { id: 's5', name: 'Academic Scholarship', office: 'LSO', applicationMode: 'info' },
+  { id: 's6', name: 'Employee Benefit Privilege Scholarship Program (EBPSP)', office: 'LSO', formType: 'standard', referencePrefix: 'DLSU-D-EBPSP' },
+  { id: 's7', name: 'Athletic Scholarship', office: 'LSO', applicationMode: 'info' },
+  { id: 's8', name: 'Vicissitude Scholarship Program', office: 'LSO', applicationMode: 'info' },
+  { id: 's9', name: 'Performing Arts Group (PAG) Scholarship', office: 'LSO', applicationMode: 'info' },
+  { id: 's10', name: '267th NROTC Scholarship', office: 'LSO', applicationMode: 'info' },
+  { id: 's11', name: 'KALINGA Scholarship Initiatives', office: 'LSO', applicationMode: 'info' },
 ];
 
 function findScholarship(scholarshipId) {
   return SCHOLARSHIPS.find(s => s.id === scholarshipId);
 }
 
-module.exports = { SCHOLARSHIPS, OFFICES, ALUMNI_INSTITUTIONS, ALUMNI_RELATIONSHIPS, findScholarship };
+function acceptsOnlineApplications(scholarship) {
+  return (scholarship.applicationMode || 'online') === 'online';
+}
+
+module.exports = { SCHOLARSHIPS, acceptsOnlineApplications, OFFICES, ALUMNI_INSTITUTIONS, ALUMNI_RELATIONSHIPS, findScholarship };
