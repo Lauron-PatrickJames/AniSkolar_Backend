@@ -63,6 +63,8 @@ app.use('/api/students', studentRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/application-drafts', applicationDraftRoutes);
 app.use('/api/announcements', announcementRoutes);
+// Same router under /api/admin, e.g. POST /api/admin/announcements/:id/facebook/retry.
+app.use('/api/admin/announcements', announcementRoutes);
 
 // Health check
 app.get('/', (req, res) => {
