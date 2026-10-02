@@ -55,6 +55,7 @@ router.get('/admin', requireAdso, async (req, res) => {
         name: s.name,
         office: s.office,
         formType: s.formType,
+        applicationMode: s.applicationMode || 'online',
         overrides: overridesById.get(s.id) || { id: s.id },
         applications: countsById[s.id] || { total: 0, byStatus: {} },
       })),
