@@ -790,7 +790,14 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
     // a decision that was already made. Approving from review needs none.
     // (A note-only save re-sends the current status and is unaffected.)
     const note = typeof reviewNote === 'string' ? reviewNote.trim() : '';
-    if (status !== application.status && !note) {
+    // Every call records a decision in the history, so re-sending the
+    // current status (the old "Save note" button) is refused: it used to
+    // add a second identical entry ("Needs revision" twice). A changed
+    // message goes with a new decision ("Change decision" in the admin).
+    if (status === application.status) {
+      return res.status(409).json({ error: `This application is already ${status}. Choose a different decision to change it.` });
+    }
+    if (!note) {
       if (status === 'Needs Revision' || status === 'Rejected') {
         return res.status(400).json({ error: 'Add a message to the applicant explaining what to do or why.' });
       }
@@ -799,9 +806,8 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
       }
     }
 
-    // Only a real status change records who decided. "Save note only"
-    // re-sends the current status and must not turn into (or erase) an
-    // LSO override.
+    // Records which office made this decision ('LSO' on an office
+    // application = an AdSO override).
     if (status !== application.status) {
       application.decisionOffice = office || 'LSO';
     }
