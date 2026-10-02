@@ -45,7 +45,14 @@ const historyEntrySchema = new mongoose.Schema({
     required: true,
   },
   note: String,
+  // 'student', 'system' (automatic events such as sending an approved
+  // office application to the AdSO), or the admin's email.
   changedBy: String,
+  // Admin entries only: display name and office code ('LSO', 'POLCA',
+  // 'ALUMNI') at the time of the change, so the history can show
+  // "POLCA Office · Maria Santos". Older entries don't have them.
+  changedByName: String,
+  changedByOffice: String,
   changedAt: { type: Date, default: Date.now },
 }, { _id: false });
 
