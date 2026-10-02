@@ -8,6 +8,7 @@ const { requireAdso } = require('../middleware/requireAdmin');
 const { announcementImageUpload } = require('../middleware/uploadConfig');
 const { getBucket } = require('../utils/gridfs');
 const facebook = require('../services/facebook');
+const { findScholarship } = require('../data/scholarships');
 
 // Announcements are managed by the AdSO only (requireAdso = requireAdmin +
 // office ADSO). POLCA / Alumni admins and students get 403. The published
@@ -24,6 +25,14 @@ const facebook = require('../services/facebook');
 // kept with fbStatus 'failed' and fbError, and can be retried.
 
 // --- Helpers --------------------------------------------------------------
+
+// '' or null clears the link; anything else must be a known scholarship.
+// Returns { value } or { error }.
+function parseScholarshipId(value) {
+  if (value === null || value === '' || value === 'null') return { value: null };
+  if (typeof value !== 'string' || !findScholarship(value)) return { error: 'Unknown related scholarship.' };
+  return { value };
+}
 
 function parseBool(value) {
   if (typeof value === 'boolean') return value;
@@ -245,7 +254,8 @@ router.get('/:id/image', async (req, res) => {
 
 // POST /api/announcements
 // JSON or multipart (with an optional "image" JPG). Fields: title,
-// description, content, category, isPinned, status ('draft' | 'published'),
+// description, content, category, scholarshipId (related scholarship, optional),
+// isPinned, status ('draft' | 'published'),
 // fbEnabled ("Also post to Facebook"). Facebook is only posted to when the
 // announcement is published.
 router.post('/', requireAdso, withImageUpload, async (req, res) => {
@@ -255,6 +265,8 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
     if (!title || !description || !content) {
       return res.status(400).json({ error: 'Title, description, and content are required.' });
     }
+    const related = req.body.scholarshipId === undefined ? { value: null } : parseScholarshipId(req.body.scholarshipId);
+    if (related.error) return res.status(400).json({ error: related.error });
     const willPublish = status === 'published';
     if (req.file) newImageId = await storeImage(req.file);
 
@@ -263,6 +275,7 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
       description,
       content,
       category: category || 'General',
+      scholarshipId: related.value,
       isPinned: parseBool(req.body.isPinned) ?? false,
       status: willPublish ? 'published' : 'draft',
       publishedAt: willPublish ? new Date() : null,
@@ -309,6 +322,11 @@ router.patch('/:id', requireAdso, withImageUpload, async (req, res) => {
     if (description !== undefined) existing.description = description;
     if (content !== undefined) existing.content = content;
     if (category !== undefined) existing.category = category;
+    if (req.body.scholarshipId !== undefined) {
+      const related = parseScholarshipId(req.body.scholarshipId);
+      if (related.error) return res.status(400).json({ error: related.error });
+      existing.scholarshipId = related.value;
+    }
     const isPinned = parseBool(req.body.isPinned);
     if (isPinned !== undefined) existing.isPinned = isPinned;
     const fbEnabled = parseBool(req.body.fbEnabled);
