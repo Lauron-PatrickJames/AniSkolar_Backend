@@ -9,7 +9,7 @@ const { getBucket } = require('../utils/gridfs');
 const Application = require('../models/Application');
 const ApplicationDraft = require('../models/ApplicationDraft');
 const ScholarshipSetting = require('../models/ScholarshipSetting');
-const { findScholarship } = require('../data/scholarships');
+const { findScholarship, acceptsOnlineApplications } = require('../data/scholarships');
 const { officeFilter, scopedOffice } = require('../utils/officeScope');
 const {
   isGrantFormType,
@@ -135,6 +135,9 @@ router.post('/', (req, res) => {
       const scholarship = findScholarship(scholarshipId);
       if (!scholarship) {
         return res.status(400).json({ error: 'Unknown scholarship.' });
+      }
+      if (!acceptsOnlineApplications(scholarship)) {
+        return res.status(400).json({ error: 'This scholarship doesn\'t take online applications. Contact the AdSO for how it is awarded.' });
       }
 
       // The AdSO can close a scholarship from the admin Scholarships page.
