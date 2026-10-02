@@ -46,7 +46,9 @@ async function requireAdmin(req, res, next) {
       });
     }
 
-    req.adminUser = { id: userId, email: user.emailAddresses?.[0]?.emailAddress, office };
+    // Display name for history entries ("POLCA Office · Maria Santos").
+    const name = [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || undefined;
+    req.adminUser = { id: userId, email: user.emailAddresses?.[0]?.emailAddress, name, office };
     next();
   } catch (err) {
     console.error('requireAdmin check failed:', err);

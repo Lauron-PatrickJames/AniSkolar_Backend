@@ -11,6 +11,7 @@ const ApplicationDraft = require('../models/ApplicationDraft');
 const ScholarshipSetting = require('../models/ScholarshipSetting');
 const { findScholarship, acceptsOnlineApplications } = require('../data/scholarships');
 const { officeFilter, scopedOffice } = require('../utils/officeScope');
+const { academicYearStartExpr } = require('../utils/academicYear');
 const {
   isGrantFormType,
   parseGrantSections,
@@ -417,7 +418,7 @@ router.get('/student/:studentNumber', async (req, res) => {
 // lifecycle CSV entirely server-side via aggregation, so exporting doesn't
 // require pulling every application down to the browser first. Accepts the
 // same filter/sort semantics as the AdminScholars UI (search, renewal,
-// sort) so "export what I'm looking at" stays true even as the dataset
+// approved, sort) so "export what I'm looking at" stays true even as the dataset
 // grows into the thousands.
 //
 // IMPORTANT: this route must be registered BEFORE router.get('/:id') below,
@@ -425,7 +426,8 @@ router.get('/student/:studentNumber', async (req, res) => {
 // route first and try to parse "export" as an ObjectId.
 router.get('/export/scholars', requireAdmin, async (req, res) => {
   try {
-    const { search = '', renewal = 'all', sort = 'recent' } = req.query;
+    // approved: 'any' | 'yes' (has an approved application) | 'no'.
+    const { search = '', renewal = 'all', approved = 'any', sort = 'recent' } = req.query;
 
     const pipeline = [
       // Office-scoped admins (e.g. POLCA) only export their own office.
@@ -438,6 +440,8 @@ router.get('/export/scholars', requireAdmin, async (req, res) => {
           _id: '$studentNumber',
           applications: { $push: '$$ROOT' },
           totalApplications: { $sum: 1 },
+          // Distinct academic years applied in (see utils/academicYear.js).
+          cycles: { $addToSet: academicYearStartExpr('$createdAt') },
           approvedCount: { $sum: { $cond: [{ $eq: ['$status', 'Approved'] }, 1, 0] } },
           rejectedCount: { $sum: { $cond: [{ $eq: ['$status', 'Rejected'] }, 1, 0] } },
           latestCreatedAt: { $max: '$createdAt' },
@@ -446,7 +450,9 @@ router.get('/export/scholars', requireAdmin, async (req, res) => {
       },
       {
         $addFields: {
-          isRenewing: { $gt: ['$totalApplications', 1] },
+          // Returning = applied in 2+ distinct academic years, not 2+
+          // applications (several in one cycle is still first-time).
+          isRenewing: { $gte: [{ $size: '$cycles' }, 2] },
           // Pull the single most recent application out of the pushed
           // array to read name/status/program off of, same as
           // buildScholarSummaries did client-side with `latest`.
@@ -550,6 +556,8 @@ router.get('/export/scholars', requireAdmin, async (req, res) => {
 
     if (renewal === 'renewing') pipeline.push({ $match: { isRenewing: true } });
     if (renewal === 'first_time') pipeline.push({ $match: { isRenewing: false } });
+    if (approved === 'yes') pipeline.push({ $match: { approvedCount: { $gt: 0 } } });
+    if (approved === 'no') pipeline.push({ $match: { approvedCount: 0 } });
 
     if (sort === 'most_applications') {
       pipeline.push({ $sort: { totalApplications: -1 } });
@@ -774,6 +782,8 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
       status,
       note: reviewNote || undefined,
       changedBy: req.adminUser.email,
+      changedByName: req.adminUser.name,
+      changedByOffice: req.adminUser.office,
       changedAt: application.reviewedAt,
     });
 
@@ -784,10 +794,13 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
       application.forwardedAt = application.reviewedAt;
       application.forwardedBy = req.adminUser.email;
       application.forwardBatchId = `${office}-approved-${application.reviewedAt.getTime()}`;
+      // Recorded as an automatic (system) event. The office that triggered
+      // it is kept in changedByOffice; the frontend words the reason from
+      // its office config instead of a stored note.
       application.history.push({
         status: 'Forwarded to LSO',
-        note: `Sent automatically when approved by the ${office} office`,
-        changedBy: req.adminUser.email,
+        changedBy: 'system',
+        changedByOffice: office,
         changedAt: application.reviewedAt,
       });
     }
