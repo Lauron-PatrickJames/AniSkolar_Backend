@@ -145,7 +145,22 @@ async function graphRequest(method, path, body) {
  */
 async function publishPost({ message, link, image }) {
   const { pageId } = requireConfig();
+  try {
+    return await createPost(pageId, { message, link, image });
+  } catch (err) {
+    // On a new post, "object does not exist" means the Page itself: a wrong
+    // FB_PAGE_ID, or a token that isn't this Page's access token.
+    if (err instanceof FacebookError && err.code === 100 && err.subcode === 33) {
+      throw new FacebookError(
+        `Facebook can't find the Page ${pageId}, or the access token can't post to it. Check that FB_PAGE_ID is the Page's numeric ID and FB_PAGE_ACCESS_TOKEN is that Page's own token (from /me/accounts, not a user token), then restart the server and retry.`,
+        { code: err.code, subcode: err.subcode, status: err.status, fbtraceId: err.fbtraceId }
+      );
+    }
+    throw err;
+  }
+}
 
+async function createPost(pageId, { message, link, image }) {
   if (image) {
     const form = new FormData();
     form.append('message', message);
