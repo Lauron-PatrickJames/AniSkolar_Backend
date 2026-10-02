@@ -14,6 +14,7 @@ const applicationRoutes = require('./routes/applications');
 const studentRoutes = require('./routes/students');
 const applicationDraftRoutes = require('./routes/applicationDrafts');
 const announcementRoutes = require('./routes/announcements');
+const scholarshipRoutes = require('./routes/scholarships');
 
 const app = express(); // ✅ Create the app first
 
@@ -63,6 +64,7 @@ app.use('/api/students', studentRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/application-drafts', applicationDraftRoutes);
 app.use('/api/announcements', announcementRoutes);
+app.use('/api/scholarships', scholarshipRoutes);
 // Same router under /api/admin, e.g. POST /api/admin/announcements/:id/facebook/retry.
 app.use('/api/admin/announcements', announcementRoutes);
 
