@@ -13,6 +13,7 @@ const { clerkMiddleware, getAuth } = require('@clerk/express');
 const applicationRoutes = require('./routes/applications');
 const studentRoutes = require('./routes/students');
 const applicationDraftRoutes = require('./routes/applicationDrafts');
+const announcementRoutes = require('./routes/announcements');
 
 const app = express(); // ✅ Create the app first
 
@@ -61,6 +62,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/students', studentRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/application-drafts', applicationDraftRoutes);
+app.use('/api/announcements', announcementRoutes);
 
 // Health check
 app.get('/', (req, res) => {

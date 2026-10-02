@@ -18,6 +18,7 @@ Mounted in [server.js](D:/AniSkolar/AniSkolar_Backend/server.js):
 - `/api/students`
 - `/api/applications`
 - `/api/application-drafts` (saved-for-later grant application drafts)
+- `/api/announcements` (managing announcements is AdSO-only; `GET /api/announcements/feed` is the public published feed)
 
 ## Requirements
 
