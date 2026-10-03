@@ -14,6 +14,8 @@
 // last name differs from Clerk's, for manual review; admin pages show the
 // full name, which reads correctly either way.
 require('dotenv').config();
+const dns = require('dns');
+dns.setServers(['8.8.8.8', '1.1.1.1']);
 const mongoose = require('mongoose');
 const { clerkClient } = require('@clerk/express');
 const Student = require('../models/Student');
