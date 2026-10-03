@@ -9,7 +9,7 @@ const { requireAdso } = require('../middleware/requireAdmin');
 // validates them and recomputes each scholar's FSE.
 
 const MAX_SCHOLARS = 10000;
-const { CATEGORIES, TERMS } = FseReport;
+const { CATEGORIES, TERMS, SPECIAL_FUNDING } = FseReport;
 
 const money = v => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v * 100) / 100 : null);
 
@@ -27,6 +27,9 @@ function validateReport(body) {
   for (const s of body.scholarships) {
     if (!s || typeof s.code !== 'string' || !s.code.trim()) return { error: 'Every scholarship needs its code.' };
     if (!CATEGORIES.includes(s.category)) return { error: `Choose a category for scholarship ${s.code}.` };
+    if (s.category === 'special' && !SPECIAL_FUNDING.includes(s.specialFunding)) {
+      return { error: `Choose how special program ${s.code} is funded.` };
+    }
     const scholars = [];
     for (const r of Array.isArray(s.scholars) ? s.scholars : []) {
       const matriculation = money(r.matriculation);
@@ -51,17 +54,21 @@ function validateReport(body) {
       fundSource: typeof s.fundSource === 'string' ? s.fundSource.trim() : '',
       subcategory: typeof s.subcategory === 'string' ? s.subcategory.trim() : '',
       category: s.category,
+      specialFunding: s.category === 'special' ? s.specialFunding : undefined,
       scholars,
     });
   }
   if (count > MAX_SCHOLARS) return { error: `A report can have at most ${MAX_SCHOLARS} scholars.` };
+
+  const spoon = body.spoonRecipients === undefined || body.spoonRecipients === '' || body.spoonRecipients === null ? undefined : Number(body.spoonRecipients);
+  if (spoon !== undefined && (!Number.isInteger(spoon) || spoon < 0)) return { error: 'SPOON recipients must be a whole number.' };
 
   const asOf = body.asOf ? new Date(body.asOf) : undefined;
   if (asOf && Number.isNaN(asOf.getTime())) return { error: 'Invalid "as of" date.' };
 
   return {
     report: {
-      academicYear, term: body.term, population: Math.round(population), asOf,
+      academicYear, term: body.term, population: Math.round(population), spoonRecipients: spoon, asOf,
       fileName: typeof body.fileName === 'string' ? body.fileName.slice(0, 200) : undefined,
       scholarships,
     },

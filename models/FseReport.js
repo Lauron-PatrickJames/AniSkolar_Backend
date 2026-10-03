@@ -7,6 +7,7 @@ const mongoose = require('mongoose');
 
 const CATEGORIES = ['internalAcademic', 'internalNonAcademic', 'external', 'special'];
 const TERMS = ['1st Semester', '2nd Semester', 'Midyear'];
+const SPECIAL_FUNDING = ['internal', 'external', 'coFunded'];
 
 const scholarSchema = new mongoose.Schema({
   studentId: { type: String, required: true, trim: true },
@@ -26,6 +27,9 @@ const scholarshipSchema = new mongoose.Schema({
   fundSource: { type: String, trim: true },
   subcategory: { type: String, trim: true },
   category: { type: String, enum: CATEGORIES, required: true },
+  // Special programs only: how the program is funded (the FSE sheet splits
+  // special-program headcount into internally / externally / co-funded).
+  specialFunding: { type: String, enum: SPECIAL_FUNDING },
   scholars: { type: [scholarSchema], default: [] },
 }, { _id: false });
 
@@ -33,6 +37,7 @@ const fseReportSchema = new mongoose.Schema({
   academicYear: { type: String, required: true, trim: true },   // "AY 2025–2026"
   term: { type: String, enum: TERMS, required: true },
   population: { type: Number, required: true, min: 1 },          // student population / FTE
+  spoonRecipients: { type: Number, min: 0 },                     // Lasallian SPOON recipients (entered)
   asOf: Date,
   fileName: { type: String, trim: true },
   scholarships: { type: [scholarshipSchema], default: [] },
@@ -44,3 +49,4 @@ fseReportSchema.index({ academicYear: 1, term: 1 }, { unique: true });
 module.exports = mongoose.model('FseReport', fseReportSchema);
 module.exports.CATEGORIES = CATEGORIES;
 module.exports.TERMS = TERMS;
+module.exports.SPECIAL_FUNDING = SPECIAL_FUNDING;
