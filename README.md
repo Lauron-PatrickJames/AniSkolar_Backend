@@ -93,8 +93,8 @@ node backfillApplicationOffice.js
 
 AniSkolar is the source of truth for announcements; it pushes them to the AdSO Facebook Page and never reads posts back.
 
-- **Create:** an announcement published with **Also post to Facebook** on (the default) is posted to the Page. A text-only post uses `POST /{page-id}/feed`. A post with an image uses `POST /{page-id}/photos`, one image per announcement.
-- **Edit:** a text edit updates the post (`POST /{post-id}`). Changing the image deletes the post and creates a new one, because Facebook can't swap a photo post's image. Unpublishing, or turning the toggle off, deletes the post.
+- **Create:** an announcement published with **Also post to Facebook** on (the default) is posted to the Page. A text-only post uses `POST /{page-id}/feed`. A post with one image uses `POST /{page-id}/photos`. With several images (up to 10), each is uploaded unpublished to `/{page-id}/photos`, then attached to one `POST /{page-id}/feed` post via `attached_media`.
+- **Edit:** a text edit updates the post (`POST /{post-id}`). Adding, removing or reordering images deletes the post and creates a new one, because Facebook can't swap a photo post's images. Unpublishing, or turning the toggle off, deletes the post.
 - **Delete:** deleting an announcement deletes its post (`DELETE /{post-id}`). If Facebook refuses, the announcement is still deleted and the admin is told to remove the post on the Page.
 - **Failures:** the announcement is always saved to MongoDB first. If Facebook fails, the record is kept with `fbStatus: 'failed'` and `fbError`. The admin list shows a **Retry** button, which calls `POST /api/admin/announcements/:id/facebook/retry` (also available at `/api/announcements/:id/facebook/retry`). An expired or invalid token (Graph error 190) produces a message saying the Page token needs renewing.
 - **Code:** every Graph API call goes through `services/facebook.js` (`publishPost`, `updatePost`, `deletePost`). The routes are in `routes/announcements.js` and are AdSO-only.
