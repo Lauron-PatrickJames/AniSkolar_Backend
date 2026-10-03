@@ -60,14 +60,15 @@ const APPLICATION_DOCUMENT_FIELDS = [
   { name: 'vicinitySketch', maxCount: 1 },
 ];
 
-// --- Announcement image (one per announcement) ---
+// --- Announcement images (up to MAX_ANNOUNCEMENT_IMAGES per announcement) ---
 // Same JPEG-only rule and memory buffering as application documents; the
-// route streams the file into GridFS and, when cross-posting, uploads the
-// same bytes to the Facebook Page.
+// route streams the files into GridFS and, when cross-posting, uploads the
+// same bytes to the Facebook Page. Must match Announcement.MAX_IMAGES.
+const MAX_ANNOUNCEMENT_IMAGES = 10;
 const announcementImageUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_FILE_SIZE, files: 1 },
+  limits: { fileSize: MAX_FILE_SIZE, files: MAX_ANNOUNCEMENT_IMAGES },
   fileFilter,
-}).single('image');
+}).array('images', MAX_ANNOUNCEMENT_IMAGES);
 
-module.exports = { profileUpload, applicationUpload, announcementImageUpload, APPLICATION_DOCUMENT_FIELDS };
+module.exports = { profileUpload, applicationUpload, announcementImageUpload, MAX_ANNOUNCEMENT_IMAGES, APPLICATION_DOCUMENT_FIELDS };

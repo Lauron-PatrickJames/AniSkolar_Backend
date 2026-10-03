@@ -6,6 +6,16 @@ const mongoose = require('mongoose');
 // AnnouncementCard simply ignores since it only reads the fields it knows.
 
 const CATEGORIES = ['General', 'Update', 'Deadline', 'Event'];
+const MAX_IMAGES = 10;
+
+const imageSchema = new mongoose.Schema(
+  {
+    fileId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    filename: String,
+    mimetype: String
+  },
+  { _id: false }
+);
 
 const announcementSchema = new mongoose.Schema(
   {
@@ -65,9 +75,17 @@ const announcementSchema = new mongoose.Schema(
       required: true
     },
 
-    // Optional single image, stored in GridFS (same bucket as application
-    // documents) and served by GET /api/announcements/:id/image.
-    imageFileId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    // Optional images (up to MAX_IMAGES, in display order), stored in GridFS
+    // (same bucket as application documents) and served by
+    // GET /api/announcements/:id/images/:fileId.
+    images: {
+      type: [imageSchema],
+      default: [],
+      validate: { validator: v => v.length <= MAX_IMAGES, message: `An announcement can have up to ${MAX_IMAGES} images.` }
+    },
+    // Legacy single image from before multi-image support. Moved into
+    // `images` when the document is loaded (see post('init') below).
+    imageFileId: { type: mongoose.Schema.Types.ObjectId, default: undefined },
     imageFilename: String,
     imageMimetype: String,
 
@@ -87,12 +105,35 @@ const announcementSchema = new mongoose.Schema(
     // What's currently on Facebook, so edits only call the API when the
     // post text or image actually changed. Internal; never sent to clients.
     fbMessage: { type: String, default: null },
-    fbImageFileId: { type: mongoose.Schema.Types.ObjectId, default: null }
+    fbImageFileIds: { type: [mongoose.Schema.Types.ObjectId], default: [] },
+    // Legacy single posted image; moved into fbImageFileIds on load.
+    fbImageFileId: { type: mongoose.Schema.Types.ObjectId, default: undefined }
   },
   { timestamps: true }
 );
 
 announcementSchema.index({ status: 1, isPinned: -1, publishedAt: -1 });
+
+// Upgrades announcements saved with a single image to the images array, in
+// memory; the change is written the next time the document is saved.
+announcementSchema.post('init', function migrateSingleImage(doc) {
+  if (doc.imageFileId) {
+    if (!doc.images?.length) {
+      doc.images = [{ fileId: doc.imageFileId, filename: doc.imageFilename, mimetype: doc.imageMimetype }];
+    }
+    doc.imageFileId = undefined;
+    doc.imageFilename = undefined;
+    doc.imageMimetype = undefined;
+  }
+  if (doc.fbImageFileId) {
+    if (!doc.fbImageFileIds?.length) doc.fbImageFileIds = [doc.fbImageFileId];
+    doc.fbImageFileId = undefined;
+  }
+});
+
+function imageUrls(doc) {
+  return (doc.images || []).map(img => `/api/announcements/${doc._id}/images/${img.fileId}`);
+}
 
 // Formats a Date the same way the mock data does — "July 01, 2026" — so the
 // API's `date` field matches what AnnouncementCard expects without the
@@ -122,7 +163,7 @@ announcementSchema.methods.toClientShape = function toClientShape() {
     createdBy: this.createdBy,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
-    imageUrl: this.imageFileId ? `/api/announcements/${this._id}/image` : null,
+    images: (this.images || []).map(img => ({ id: String(img.fileId), url: `/api/announcements/${this._id}/images/${img.fileId}` })),
     fbEnabled: this.fbEnabled,
     fbStatus: this.fbStatus,
     fbPostId: this.fbPostId,
@@ -143,10 +184,11 @@ announcementSchema.methods.toFeedShape = function toFeedShape() {
     content: this.content,
     category: this.category,
     scholarshipId: this.scholarshipId || null,
-    imageUrl: this.imageFileId ? `/api/announcements/${this._id}/image` : null,
+    imageUrls: imageUrls(this),
     fbPermalink: this.fbPostId ? this.fbPermalink : null
   };
 };
 
 module.exports = mongoose.model('Announcement', announcementSchema);
 module.exports.CATEGORIES = CATEGORIES;
+module.exports.MAX_IMAGES = MAX_IMAGES;
