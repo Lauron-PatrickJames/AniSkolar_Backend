@@ -54,12 +54,27 @@ function toObjectId(id) {
 function withImageUpload(req, res, next) {
   announcementImageUpload(req, res, (err) => {
     if (err instanceof multer.MulterError) {
-      const message = err.code === 'LIMIT_FILE_SIZE' ? 'The image must be under 10MB.' : err.message;
+      const tooMany = err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE';
+      const message = err.code === 'LIMIT_FILE_SIZE'
+        ? 'Each image must be under 10MB.'
+        : tooMany ? `An announcement can have up to ${Announcement.MAX_IMAGES} images.` : err.message;
       return res.status(400).json({ error: message });
     }
     if (err) return res.status(400).json({ error: err.message });
     next();
   });
+}
+
+// Image ids to keep on PATCH: a JSON array of file ids, in display order.
+// Returns { value } (undefined when not sent) or { error }.
+function parseKeepImageIds(value) {
+  if (value === undefined) return { value: undefined };
+  let ids = value;
+  if (typeof value === 'string') {
+    try { ids = JSON.parse(value); } catch { return { error: 'Invalid image list.' }; }
+  }
+  if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) return { error: 'Invalid image list.' };
+  return { value: ids };
 }
 
 function storeImage(file) {
@@ -69,6 +84,24 @@ function storeImage(file) {
     });
     Readable.from(file.buffer).pipe(upload).on('error', reject).on('finish', () => resolve(upload.id));
   });
+}
+
+// Stores uploaded files in GridFS, pushing each entry onto `stored` as it
+// lands so the caller can clean up if a later one fails.
+async function storeImages(files, stored) {
+  for (const file of files || []) {
+    const fileId = await storeImage(file);
+    stored.push({ fileId, filename: file.originalname, mimetype: file.mimetype });
+  }
+  return stored;
+}
+
+// Deletes newly stored images that didn't end up on a saved announcement.
+async function discardUnsaved(stored) {
+  for (const { fileId } of stored) {
+    const saved = await Announcement.exists({ 'images.fileId': fileId }).catch(() => null);
+    if (!saved) await deleteImage(fileId);
+  }
 }
 
 function readImage(fileId) {
@@ -128,31 +161,32 @@ async function syncFacebook(doc) {
       doc.fbPostId = null;
       doc.fbPermalink = null;
       doc.fbMessage = null;
-      doc.fbImageFileId = null;
+      doc.fbImageFileIds = [];
       doc.fbStatus = 'not_posted';
     } else {
       const message = facebook.composeMessage(doc);
-      const imageId = doc.imageFileId ? String(doc.imageFileId) : null;
-      const postedImageId = doc.fbImageFileId ? String(doc.fbImageFileId) : null;
+      const imageIds = doc.images.map(img => String(img.fileId)).join(',');
+      const postedImageIds = (doc.fbImageFileIds || []).map(String).join(',');
 
-      if (doc.fbPostId && imageId === postedImageId) {
-        // Same image (or none): edit the text in place, only if it changed.
+      if (doc.fbPostId && imageIds === postedImageIds) {
+        // Same images (or none): edit the text in place, only if it changed.
         if (doc.fbMessage !== message) await facebook.updatePost(doc.fbPostId, message);
       } else {
-        // New post, or the image changed — Facebook can't swap a photo
-        // post's image, so the old post is deleted and a new one created.
+        // New post, or the images changed — Facebook can't swap a photo
+        // post's images, so the old post is deleted and a new one created.
         if (doc.fbPostId) {
           await facebook.deletePost(doc.fbPostId);
           doc.fbPostId = null;
           doc.fbPermalink = null;
         }
-        const image = doc.imageFileId
-          ? { buffer: await readImage(doc.imageFileId), filename: doc.imageFilename || 'image.jpg', mimetype: doc.imageMimetype || 'image/jpeg' }
-          : undefined;
-        const { postId, permalink } = await facebook.publishPost({ message, image });
+        const images = [];
+        for (const img of doc.images) {
+          images.push({ buffer: await readImage(img.fileId), filename: img.filename || 'image.jpg', mimetype: img.mimetype || 'image/jpeg' });
+        }
+        const { postId, permalink } = await facebook.publishPost({ message, images });
         doc.fbPostId = postId;
         doc.fbPermalink = permalink;
-        doc.fbImageFileId = doc.imageFileId || null;
+        doc.fbImageFileIds = doc.images.map(img => img.fileId);
       }
       doc.fbMessage = message;
       doc.fbStatus = 'posted';
@@ -234,32 +268,40 @@ router.get('/feed', async (req, res) => {
   }
 });
 
-// GET /api/announcements/:id/image — the announcement's image, if any.
-router.get('/:id/image', async (req, res) => {
+// Streams one of an announcement's images; fileId null means the first.
+async function sendImage(req, res, fileId) {
   try {
     const objectId = toObjectId(req.params.id);
     if (!objectId) return res.status(400).json({ error: 'Invalid announcement id.' });
-    const doc = await Announcement.findById(objectId).select('imageFileId imageMimetype');
-    if (!doc?.imageFileId) return res.status(404).json({ error: 'Image not found.' });
-    res.set('Content-Type', doc.imageMimetype || 'image/jpeg');
-    res.set('Cache-Control', 'public, max-age=300');
+    const doc = await Announcement.findById(objectId).select('images imageFileId imageFilename imageMimetype');
+    const image = fileId ? doc?.images.find(img => String(img.fileId) === fileId) : doc?.images[0];
+    if (!image) return res.status(404).json({ error: 'Image not found.' });
+    res.set('Content-Type', image.mimetype || 'image/jpeg');
+    // Each file id's bytes never change, so the URL can be cached for long.
+    res.set('Cache-Control', fileId ? 'public, max-age=86400, immutable' : 'public, max-age=300');
     getBucket()
-      .openDownloadStream(doc.imageFileId)
+      .openDownloadStream(image.fileId)
       .on('error', () => { if (!res.headersSent) res.status(404).json({ error: 'Image not found.' }); else res.end(); })
       .pipe(res);
   } catch (err) {
     res.status(500).json({ error: 'Failed to load image.' });
   }
-});
+}
+
+// GET /api/announcements/:id/images/:fileId — one of the announcement's images.
+router.get('/:id/images/:fileId', (req, res) => sendImage(req, res, req.params.fileId));
+
+// GET /api/announcements/:id/image — the first image (pre-multi-image URL).
+router.get('/:id/image', (req, res) => sendImage(req, res, null));
 
 // POST /api/announcements
-// JSON or multipart (with an optional "image" JPG). Fields: title,
+// JSON or multipart (with optional "images" JPGs, up to MAX_IMAGES). Fields: title,
 // description, content, category, scholarshipId (related scholarship, optional),
 // isPinned, status ('draft' | 'published'),
 // fbEnabled ("Also post to Facebook"). Facebook is only posted to when the
 // announcement is published.
 router.post('/', requireAdso, withImageUpload, async (req, res) => {
-  let newImageId = null;
+  const newImages = [];
   try {
     const { title, description, content, category, status } = req.body;
     if (!title || !description || !content) {
@@ -268,7 +310,7 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
     const related = req.body.scholarshipId === undefined ? { value: null } : parseScholarshipId(req.body.scholarshipId);
     if (related.error) return res.status(400).json({ error: related.error });
     const willPublish = status === 'published';
-    if (req.file) newImageId = await storeImage(req.file);
+    await storeImages(req.files, newImages);
 
     const doc = new Announcement({
       title,
@@ -281,14 +323,12 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
       publishedAt: willPublish ? new Date() : null,
       createdBy: req.adminUser.email || req.adminUser.id,
       fbEnabled: parseBool(req.body.fbEnabled) ?? false,
-      imageFileId: newImageId,
-      imageFilename: req.file?.originalname,
-      imageMimetype: req.file?.mimetype,
+      images: newImages,
     });
 
     const validationError = await doc.validate().then(() => null, err => err);
     if (validationError) {
-      await deleteImage(newImageId);
+      await discardUnsaved(newImages);
       return res.status(400).json({ error: validationMessage(validationError) });
     }
 
@@ -296,21 +336,20 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
     sendSaved(res, 201, doc, facebookResult);
   } catch (err) {
     console.error('Create announcement error:', err);
-    if (newImageId) {
-      const saved = await Announcement.exists({ imageFileId: newImageId }).catch(() => null);
-      if (!saved) await deleteImage(newImageId);
-    }
+    await discardUnsaved(newImages);
     res.status(500).json({ error: 'Failed to create announcement.' });
   }
 });
 
 // PATCH /api/announcements/:id
-// Partial update (JSON or multipart). Besides the POST fields it accepts a
-// new "image" file or removeImage=true. Draft -> published stamps
-// publishedAt. The Facebook post follows: text edits update it, a changed
-// image recreates it, unpublishing or turning fbEnabled off deletes it.
+// Partial update (JSON or multipart). Besides the POST fields it accepts
+// keepImageIds (JSON array of existing image ids to keep, in order; omitted
+// keeps them all) and new "images" files, which are added after the kept
+// ones. Draft -> published stamps publishedAt. The Facebook post follows:
+// text edits update it, changed images recreate it, unpublishing or turning
+// fbEnabled off deletes it.
 router.patch('/:id', requireAdso, withImageUpload, async (req, res) => {
-  let newImageId = null;
+  const newImages = [];
   try {
     const objectId = toObjectId(req.params.id);
     if (!objectId) return res.status(400).json({ error: 'Invalid announcement id.' });
@@ -339,35 +378,35 @@ router.patch('/:id', requireAdso, withImageUpload, async (req, res) => {
       }
     }
 
-    const oldImageId = existing.imageFileId;
-    if (req.file) {
-      newImageId = await storeImage(req.file);
-      existing.imageFileId = newImageId;
-      existing.imageFilename = req.file.originalname;
-      existing.imageMimetype = req.file.mimetype;
-    } else if (parseBool(req.body.removeImage)) {
-      existing.imageFileId = null;
-      existing.imageFilename = undefined;
-      existing.imageMimetype = undefined;
+    const keep = parseKeepImageIds(req.body.keepImageIds);
+    if (keep.error) return res.status(400).json({ error: keep.error });
+    const oldImages = existing.images.map(img => img.toObject());
+    if (keep.value !== undefined || req.files?.length) {
+      const kept = keep.value === undefined
+        ? oldImages
+        : keep.value.map(id => oldImages.find(img => String(img.fileId) === id)).filter(Boolean);
+      if (kept.length + (req.files?.length || 0) > Announcement.MAX_IMAGES) {
+        return res.status(400).json({ error: `An announcement can have up to ${Announcement.MAX_IMAGES} images.` });
+      }
+      await storeImages(req.files, newImages);
+      existing.images = [...kept, ...newImages];
     }
 
     const validationError = await existing.validate().then(() => null, err => err);
     if (validationError) {
-      await deleteImage(newImageId);
+      await discardUnsaved(newImages);
       return res.status(400).json({ error: validationMessage(validationError) });
     }
 
     const facebookResult = await saveAndSync(existing);
-    if (oldImageId && String(oldImageId) !== String(existing.imageFileId || '')) {
-      await deleteImage(oldImageId);
+    const remaining = new Set(existing.images.map(img => String(img.fileId)));
+    for (const img of oldImages) {
+      if (!remaining.has(String(img.fileId))) await deleteImage(img.fileId);
     }
     sendSaved(res, 200, existing, facebookResult);
   } catch (err) {
     console.error('Update announcement error:', err);
-    if (newImageId) {
-      const saved = await Announcement.exists({ imageFileId: newImageId }).catch(() => null);
-      if (!saved) await deleteImage(newImageId);
-    }
+    await discardUnsaved(newImages);
     res.status(500).json({ error: 'Failed to update announcement.' });
   }
 });
@@ -393,7 +432,7 @@ router.post('/:id/facebook/retry', requireAdso, async (req, res) => {
 });
 
 // DELETE /api/announcements/:id
-// Deletes the announcement, its image, and its Facebook post. If Facebook
+// Deletes the announcement, its images, and its Facebook post. If Facebook
 // can't delete the post, the announcement is still deleted and the
 // response carries facebookWarning so the admin can remove it by hand.
 router.delete('/:id', requireAdso, async (req, res) => {
@@ -414,7 +453,7 @@ router.delete('/:id', requireAdso, async (req, res) => {
     }
 
     await doc.deleteOne();
-    await deleteImage(doc.imageFileId);
+    for (const img of doc.images) await deleteImage(img.fileId);
     res.json({ success: true, facebookWarning });
   } catch (err) {
     console.error('Delete announcement error:', err);
