@@ -144,15 +144,16 @@ async function graphRequest(method, path, body) {
 }
 
 /**
- * Publishes a post to the Page: a text post via /{page-id}/feed, or a photo
- * post via /{page-id}/photos when an image is given (one image per post).
- * @param {{ message: string, link?: string, image?: FacebookImage }} input
+ * Publishes a post to the Page: a text post via /{page-id}/feed, a photo
+ * post via /{page-id}/photos for one image, or a multi-photo post (images
+ * uploaded unpublished, then attached to a /feed post) for several.
+ * @param {{ message: string, link?: string, images?: FacebookImage[] }} input
  * @returns {Promise<PublishResult>}
  */
-async function publishPost({ message, link, image }) {
+async function publishPost({ message, link, images = [] }) {
   const { pageId } = requireConfig();
   try {
-    return await createPost(pageId, { message, link, image });
+    return await createPost(pageId, { message, link, images });
   } catch (err) {
     // On a new post, "object does not exist" means the Page itself: a wrong
     // FB_PAGE_ID, or a token that isn't this Page's access token.
@@ -166,12 +167,17 @@ async function publishPost({ message, link, image }) {
   }
 }
 
-async function createPost(pageId, { message, link, image }) {
-  if (image) {
-    const form = new FormData();
+function photoForm(image) {
+  const form = new FormData();
+  form.append('source', new Blob([image.buffer], { type: image.mimetype }), image.filename || 'image.jpg');
+  return form;
+}
+
+async function createPost(pageId, { message, link, images }) {
+  if (images.length === 1) {
+    const form = photoForm(images[0]);
     form.append('message', message);
     form.append('published', 'true');
-    form.append('source', new Blob([image.buffer], { type: image.mimetype }), image.filename || 'image.jpg');
     const json = await graphRequest('POST', `${pageId}/photos`, form);
     // /photos returns the photo id plus the id of the Page post wrapping it;
     // the post id is what can be edited, deleted and linked to.
@@ -180,14 +186,25 @@ async function createPost(pageId, { message, link, image }) {
   }
 
   const params = new URLSearchParams({ message });
-  if (link) params.append('link', link);
+  if (images.length > 1) {
+    // Upload each photo unpublished (one at a time to keep memory and rate
+    // limits in check), then attach them all to a single feed post.
+    for (const [i, image] of images.entries()) {
+      const form = photoForm(image);
+      form.append('published', 'false');
+      const json = await graphRequest('POST', `${pageId}/photos`, form);
+      params.append(`attached_media[${i}]`, JSON.stringify({ media_fbid: json.id }));
+    }
+  } else if (link) {
+    params.append('link', link);
+  }
   const json = await graphRequest('POST', `${pageId}/feed`, params);
   return { postId: json.id, permalink: permalinkFor(json.id) };
 }
 
 /**
  * Replaces the text of an existing post. Facebook only lets an app edit
- * posts it created, and a photo post's image can't be changed this way —
+ * posts it created, and a photo post's images can't be changed this way —
  * callers delete and republish for that.
  * @param {string} postId
  * @param {string} message
