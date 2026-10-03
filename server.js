@@ -15,10 +15,14 @@ const studentRoutes = require('./routes/students');
 const applicationDraftRoutes = require('./routes/applicationDrafts');
 const announcementRoutes = require('./routes/announcements');
 const scholarshipRoutes = require('./routes/scholarships');
+const fseRoutes = require('./routes/fse');
 
 const app = express(); // ✅ Create the app first
 
 app.use(cors());
+// An FSE report carries one row per scholar (~1,000 a term), more than the
+// default 100 KB body limit; this parser runs first for that route only.
+app.use('/api/fse', express.json({ limit: '5mb' }));
 app.use(express.json());
 
 // Populates req.auth on every request based on the caller's Clerk session
@@ -65,6 +69,7 @@ app.use('/api/applications', applicationRoutes);
 app.use('/api/application-drafts', applicationDraftRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/scholarships', scholarshipRoutes);
+app.use('/api/fse', fseRoutes);
 // Same router under /api/admin, e.g. POST /api/admin/announcements/:id/facebook/retry.
 app.use('/api/admin/announcements', announcementRoutes);
 
