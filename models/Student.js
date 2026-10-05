@@ -1,6 +1,27 @@
 const mongoose = require('mongoose');
 
 const CIVIL_STATUS_OPTIONS = ['Single', 'Married', 'Widowed', 'Separated', 'Divorced'];
+const GUARDIAN_TYPES = ['father', 'mother', 'other'];
+const VERIFICATION_GROUPS = ['program', 'enrollment', 'gpa'];
+
+// Set when an office verifies a group of academic details; absent means
+// self-reported.
+const verificationSchema = new mongoose.Schema({
+    verifiedAt: Date,
+    verifiedBy: String,       // admin email
+    verifiedByName: String,
+    office: String,           // office code: 'LSO' (AdSO), 'POLCA', 'ALUMNI'
+}, { _id: false });
+
+// A student asking the office to correct a verified group.
+const correctionRequestSchema = new mongoose.Schema({
+    group: { type: String, enum: VERIFICATION_GROUPS, required: true },
+    message: { type: String, trim: true, maxlength: 1000, required: true },
+    status: { type: String, enum: ['open', 'resolved'], default: 'open' },
+    createdAt: { type: Date, default: Date.now },
+    resolvedAt: Date,
+    resolvedBy: String,
+}, { _id: true });
 
 const studentSchema = new mongoose.Schema({
     studentNumber: { type: String, required: true, unique: true },
@@ -18,6 +39,8 @@ const studentSchema = new mongoose.Schema({
     firstName: { type: String, trim: true },
     middleName: { type: String, trim: true },
     lastName: { type: String, trim: true },
+    // Course name and college are taken from the program list
+    // (data/programs.js) by programCode; students pick the program only.
     course: String,
     college: String,
     yearLevel: String,
@@ -27,11 +50,10 @@ const studentSchema = new mongoose.Schema({
     // new records created via /api/students/complete-profile never set this.
     passwordHash: { type: String },
 
-    // GPA is numeric now instead of free text, so bad input ("asdf") can't
-    // get stored. Bounds are set wide (1.0–5.0) to cover either a
-    // 4.0-high or 1.0-high grading scale — tighten these to match
-    // DLSU-D's actual scale once you confirm which direction it runs.
-    gpa: { type: Number, min: 1.0, max: 5.0 },
+    // Cumulative GPA on DLSU-D's scale: 0.00–4.00, higher is better
+    // (4.00 highest, 0.00 failed). Same scale as the GPA calculator and
+    // the scholarships' GPA rules (frontend src/utils/eligibility.ts).
+    gpa: { type: Number, min: 0, max: 4 },
 
     // --- Personal Details ---
     programCode: String,        // e.g. "BSIT"
@@ -48,15 +70,37 @@ const studentSchema = new mongoose.Schema({
     zipCode: String,
     country: { type: String, default: 'Philippines' },
     telephoneNumber: String,
+    // Philippine mobile, stored as 09XXXXXXXXX (routes/students.js normalizes).
     mobileNumber: String,
 
     // --- Parents / Guardian Information ---
     fatherName: String,
+    fatherContactNo: String,
     motherName: String,
+    motherContactNo: String,
+    // Who the guardian is. 'father' / 'mother' copy that parent into the
+    // guardian fields below on save, so readers of guardianName etc. (the
+    // application forms) keep working; 'other' is someone else.
+    guardianType: { type: String, enum: GUARDIAN_TYPES },
     guardianName: String,
     guardianRelationship: String,
     guardianAddress: String,
+    // The guardian lives at the student's home address; guardianAddress is
+    // filled from it on save.
+    guardianAddressSameAsHome: Boolean,
     guardianContactNo: String,
+
+    // --- Verification of academic details ---
+    // Academic details are self-reported until an office verifies them,
+    // per group: 'program' (program, course, college), 'enrollment' (year
+    // level, section), 'gpa'. A verified group is locked from student
+    // edits; the student files a correction request instead.
+    verification: {
+        program: verificationSchema,
+        enrollment: verificationSchema,
+        gpa: verificationSchema,
+    },
+    correctionRequests: { type: [correctionRequestSchema], default: [] },
 
     profilePicture: {
         filename: String,
@@ -82,3 +126,5 @@ const studentSchema = new mongoose.Schema({
 
 module.exports = mongoose.model('Student', studentSchema);
 module.exports.CIVIL_STATUS_OPTIONS = CIVIL_STATUS_OPTIONS;
+module.exports.GUARDIAN_TYPES = GUARDIAN_TYPES;
+module.exports.VERIFICATION_GROUPS = VERIFICATION_GROUPS;
