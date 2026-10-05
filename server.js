@@ -16,6 +16,8 @@ const applicationDraftRoutes = require('./routes/applicationDrafts');
 const announcementRoutes = require('./routes/announcements');
 const scholarshipRoutes = require('./routes/scholarships');
 const fseRoutes = require('./routes/fse');
+const renewalRoutes = require('./routes/renewals');
+const dutyHoursRoutes = require('./routes/dutyHours');
 
 const app = express(); // ✅ Create the app first
 
@@ -70,6 +72,8 @@ app.use('/api/application-drafts', applicationDraftRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/scholarships', scholarshipRoutes);
 app.use('/api/fse', fseRoutes);
+app.use('/api/renewals', renewalRoutes);
+app.use('/api/duty-hours', dutyHoursRoutes);
 // Same router under /api/admin, e.g. POST /api/admin/announcements/:id/facebook/retry.
 app.use('/api/admin/announcements', announcementRoutes);
 

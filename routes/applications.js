@@ -1,14 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { Readable } = require('stream');
 const { ObjectId } = require('mongodb');
 const { applicationUpload } = require('../middleware/uploadConfig');
 const { requireAdmin } = require('../middleware/requireAdmin');
-const { getBucket } = require('../utils/gridfs');
+const { getBucket, storeFilesInGridFS } = require('../utils/gridfs');
 const Application = require('../models/Application');
 const ApplicationDraft = require('../models/ApplicationDraft');
 const ScholarshipSetting = require('../models/ScholarshipSetting');
+const Student = require('../models/Student');
 const { findScholarship, acceptsOnlineApplications } = require('../data/scholarships');
 const { officeFilter, scopedOffice } = require('../utils/officeScope');
 const { academicYearStartExpr } = require('../utils/academicYear');
@@ -56,49 +56,31 @@ function joinNameParts(partsExpr) {
 // Office-use data that applicants never see.
 const STUDENT_HIDDEN_FIELDS = '-adminFields -internalNotes';
 
+// The applicant's name on an application always comes from their Student
+// record (first and last from the university account, middle from the
+// profile) — never from what the form sent, and never split from a full
+// name. Records without name parts yet are left as submitted.
+async function stampStudentNames(studentNumber, application) {
+  const student = await Student.findOne({ studentNumber }).select('firstName middleName lastName').lean();
+  if (!student?.firstName || !student?.lastName) return;
+  const middle = (student.middleName || '').trim();
+  if (application.standardInfo) {
+    application.standardInfo = { ...application.standardInfo, firstName: student.firstName, middleName: middle, lastName: student.lastName };
+  }
+  if (application.personalInfo) {
+    const info = { ...application.personalInfo, firstName: student.firstName, lastName: student.lastName };
+    // The SFA form has a middle initial; the grant forms a middle name.
+    if ('middleInitial' in info) info.middleInitial = middle.charAt(0).toUpperCase();
+    else info.middleName = middle;
+    application.personalInfo = info;
+  }
+}
+
 function toStudentView(application) {
   const obj = application.toObject ? application.toObject() : { ...application };
   delete obj.adminFields;
   delete obj.internalNotes;
   return obj;
-}
-
-// Streams every file into GridFS (MongoDB Atlas). If any single upload
-// fails partway through, the ones that already succeeded are deleted so
-// no orphaned files are left behind, and the error is rethrown.
-async function storeFilesInGridFS(files, labels, meta = []) {
-  const bucket = getBucket();
-  const uploadedFileIds = [];
-  try {
-    return await Promise.all(
-      files.map(
-        (file, idx) =>
-          new Promise((resolve, reject) => {
-            const uploadStream = bucket.openUploadStream(file.originalname, {
-              metadata: { docType: labels[idx], mimetype: file.mimetype },
-            });
-            uploadedFileIds.push(uploadStream.id);
-            Readable.from(file.buffer)
-              .pipe(uploadStream)
-              .on('error', reject)
-              .on('finish', () => {
-                resolve({
-                  docType: labels[idx],
-                  slotKey: meta[idx]?.slotKey,
-                  variant: meta[idx]?.variant,
-                  fileId: uploadStream.id,
-                  filename: file.originalname,
-                  mimetype: file.mimetype,
-                  size: file.size,
-                });
-              });
-          })
-      )
-    );
-  } catch (uploadErr) {
-    await Promise.allSettled(uploadedFileIds.map(id => bucket.delete(id)));
-    throw uploadErr;
-  }
 }
 
 // Validates a grant-form (POLCA / Alumni) submission before anything is
@@ -240,6 +222,7 @@ router.post('/', (req, res) => {
         applicationData.standardInfo = JSON.parse(standardInfo);
       }
 
+      await stampStudentNames(studentNumber, applicationData);
       const application = await Application.create(applicationData);
 
       // The saved-for-later draft (routes/applicationDrafts.js) has done its
@@ -389,6 +372,11 @@ router.patch('/:id', (req, res) => {
       } else if (standardInfo) {
         existing.standardInfo = JSON.parse(standardInfo);
       }
+
+      const names = { standardInfo: existing.standardInfo, personalInfo: existing.personalInfo };
+      await stampStudentNames(existing.studentNumber, names);
+      if (names.standardInfo) { existing.standardInfo = names.standardInfo; existing.markModified('standardInfo'); }
+      if (names.personalInfo) { existing.personalInfo = names.personalInfo; existing.markModified('personalInfo'); }
 
       existing.status = 'Under Evaluation';
       // Deliberately NOT clearing reviewNote/reviewedBy/reviewedAt here.
@@ -730,6 +718,24 @@ router.get('/', requireAdmin, async (req, res) => {
       {
         $addFields: {
           avatarUrl: { $arrayElemAt: ['$studentRecord.avatarUrl', 0] },
+          // The student's profile now, for comparison with the details
+          // stored on the application when it was submitted.
+          currentProfile: {
+            $let: {
+              vars: { s: { $arrayElemAt: ['$studentRecord', 0] } },
+              in: {
+                firstName: '$$s.firstName',
+                middleName: '$$s.middleName',
+                lastName: '$$s.lastName',
+                course: '$$s.course',
+                programCode: '$$s.programCode',
+                yearLevel: '$$s.yearLevel',
+                section: '$$s.section',
+                gpa: '$$s.gpa',
+                updatedAt: '$$s.updatedAt',
+              },
+            },
+          },
         },
       },
       { $project: { studentRecord: 0 } },
