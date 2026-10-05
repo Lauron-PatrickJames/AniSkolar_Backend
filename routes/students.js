@@ -2,22 +2,58 @@ const express = require('express');
 const router = express.Router();
 const { getAuth, clerkClient } = require('@clerk/express');
 const Student = require('../models/Student');
+const { findProgram, YEAR_LEVELS } = require('../data/programs');
+const { requireAdso } = require('../middleware/requireAdmin');
 
 const ALLOWED_EMAIL_DOMAIN = '@dlsud.edu.ph';
 
 // Fields a student is allowed to set themselves. studentNumber, clerkId,
 // name, and email are deliberately excluded — those are identity fields
-// tied to Clerk/verification, not editable profile data.
+// tied to Clerk/verification, not editable profile data. Course and
+// college aren't either: they follow from programCode (data/programs.js).
 const EDITABLE_FIELDS = [
   // The middle name is the student's to enter; first/last come from Clerk.
   'middleName',
-  'course', 'college', 'yearLevel', 'gpa',
-  'programCode', 'section', 'dateOfBirth', 'nationality', 'placeOfBirth', 'civilStatus',
+  'programCode', 'yearLevel', 'section', 'gpa',
+  'dateOfBirth', 'nationality', 'placeOfBirth', 'civilStatus',
   'homeAddress', 'cityMunicipality', 'province', 'zipCode', 'country',
   'telephoneNumber', 'mobileNumber',
-  'fatherName', 'motherName', 'guardianName', 'guardianRelationship',
-  'guardianAddress', 'guardianContactNo',
+  'fatherName', 'fatherContactNo', 'motherName', 'motherContactNo',
+  'guardianType', 'guardianName', 'guardianRelationship', 'guardianAddress', 'guardianAddressSameAsHome', 'guardianContactNo',
 ];
+
+// Academic fields per verification group (Student.verification).
+const GROUP_FIELDS = {
+  program: ['programCode'],
+  enrollment: ['yearLevel', 'section'],
+  gpa: ['gpa'],
+};
+const GROUP_LABELS = { program: 'Program', enrollment: 'Year level and section', gpa: 'GPA' };
+
+const TEXT_LIMIT = 200;
+
+// Philippine mobile number -> 09XXXXXXXXX, or null if it isn't one.
+// Accepts 09XXXXXXXXX, +639XXXXXXXXX or 639XXXXXXXXX, with spaces or dashes.
+function normalizePhMobile(value) {
+  const digits = String(value).replace(/[\s-]/g, '');
+  const m = digits.match(/^(?:\+?63|0)(9\d{9})$/);
+  return m ? `0${m[1]}` : null;
+}
+
+// Any contact number: a PH mobile is normalized; otherwise 7–15 digits
+// with the usual punctuation (landlines, area codes) are kept as typed.
+function normalizeContactNumber(value) {
+  const mobile = normalizePhMobile(value);
+  if (mobile) return mobile;
+  const text = String(value).trim();
+  const digitCount = text.replace(/\D/g, '').length;
+  return /^[\d\s()+-]+$/.test(text) && digitCount >= 7 && digitCount <= 15 ? text : null;
+}
+
+function formatHomeAddress(s) {
+  const line2 = [s.cityMunicipality, [s.province, s.zipCode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  return [s.homeAddress, line2, s.country].map(p => (p || '').trim()).filter(Boolean).join(', ');
+}
 
 // Parses/validates the subset of req.body fields that are safe to persist.
 // Returns { data, error } — error is a user-facing message if validation fails.
@@ -26,16 +62,34 @@ function sanitizeProfileFields(body) {
 
   for (const field of EDITABLE_FIELDS) {
     if (body[field] === undefined) continue;
-    data[field] = body[field];
+    data[field] = typeof body[field] === 'string' ? body[field].trim().slice(0, TEXT_LIMIT) : body[field];
+  }
+
+  if (data.programCode !== undefined) {
+    if (!data.programCode) {
+      data.programCode = undefined;
+      data.course = undefined;
+      data.college = undefined;
+    } else {
+      const program = findProgram(data.programCode);
+      if (!program) return { error: 'Choose your program from the list.' };
+      data.programCode = program.code;
+      data.course = program.name;
+      data.college = program.college;
+    }
+  }
+
+  if (data.yearLevel && !YEAR_LEVELS.includes(data.yearLevel)) {
+    return { error: 'Choose your year level from the list.' };
   }
 
   if (data.gpa !== undefined && data.gpa !== '' && data.gpa !== null) {
     const parsed = Number(data.gpa);
-    if (Number.isNaN(parsed) || parsed < 1.0 || parsed > 5.0) {
-      return { error: 'GPA must be a number between 1.0 and 5.0.' };
+    if (Number.isNaN(parsed) || parsed < 0 || parsed > 4) {
+      return { error: 'GPA must be a number between 0.00 and 4.00.' };
     }
-    data.gpa = parsed;
-  } else if (data.gpa === '') {
+    data.gpa = Math.round(parsed * 100) / 100;
+  } else if (data.gpa === '' || data.gpa === null) {
     data.gpa = undefined;
   }
 
@@ -48,10 +102,70 @@ function sanitizeProfileFields(body) {
     if (Number.isNaN(parsed.getTime())) {
       return { error: 'Invalid date of birth.' };
     }
+    if (parsed.getTime() > Date.now()) {
+      return { error: 'Date of birth can’t be in the future.' };
+    }
     data.dateOfBirth = parsed;
+  } else if (data.dateOfBirth === '') {
+    data.dateOfBirth = undefined;
   }
 
+  if (data.mobileNumber) {
+    const mobile = normalizePhMobile(data.mobileNumber);
+    if (!mobile) return { error: 'Enter a Philippine mobile number, e.g. 09171234567 or +639171234567.' };
+    data.mobileNumber = mobile;
+  }
+  for (const [field, label] of [['telephoneNumber', 'telephone'], ['fatherContactNo', "father's contact"], ['motherContactNo', "mother's contact"], ['guardianContactNo', "guardian's contact"]]) {
+    if (!data[field]) continue;
+    const normalized = normalizeContactNumber(data[field]);
+    if (!normalized) return { error: `Enter a valid ${label} number.` };
+    data[field] = normalized;
+  }
+
+  const country = data.country ?? body.country;
+  if (data.zipCode && (!country || country === 'Philippines') && !/^\d{4}$/.test(data.zipCode)) {
+    return { error: 'ZIP code must be 4 digits.' };
+  }
+
+  if (data.guardianType !== undefined && data.guardianType !== '' && !Student.GUARDIAN_TYPES.includes(data.guardianType)) {
+    return { error: 'Choose who your guardian is.' };
+  }
+  if (data.guardianType === '') data.guardianType = undefined;
+  if (data.guardianAddressSameAsHome !== undefined) data.guardianAddressSameAsHome = data.guardianAddressSameAsHome === true;
+
   return { data };
+}
+
+// After an update: a guardian who is the father or mother mirrors that
+// parent, and "same as my home address" mirrors the home address, so the
+// application forms (which read guardianName etc.) see the right values.
+function applyGuardianLinks(student) {
+  if (student.guardianType === 'father' || student.guardianType === 'mother') {
+    const isFather = student.guardianType === 'father';
+    student.guardianName = isFather ? student.fatherName : student.motherName;
+    student.guardianRelationship = isFather ? 'Father' : 'Mother';
+    student.guardianContactNo = (isFather ? student.fatherContactNo : student.motherContactNo) || student.guardianContactNo;
+    student.guardianAddress = formatHomeAddress(student) || undefined;
+    student.guardianAddressSameAsHome = true;
+  } else if (student.guardianAddressSameAsHome) {
+    student.guardianAddress = formatHomeAddress(student) || undefined;
+  }
+}
+
+// Changes to a verified group are refused; the student requests a
+// correction instead. Returns an error message or null.
+function verifiedChangeError(student, data) {
+  for (const [group, fields] of Object.entries(GROUP_FIELDS)) {
+    if (!student.verification?.[group]?.verifiedAt) continue;
+    const changed = fields.some(f => {
+      if (data[f] === undefined && !(f in data)) return false;
+      const before = student[f] ?? '';
+      const after = data[f] ?? '';
+      return f === 'gpa' ? Number(before || 0) !== Number(after || 0) : String(before).toLowerCase() !== String(after).toLowerCase();
+    });
+    if (changed) return `${GROUP_LABELS[group]} has been verified by the office and can’t be changed here. Request a correction instead.`;
+  }
+  return null;
 }
 
 // First and last name exactly as Clerk has them. Never split a full-name
@@ -152,7 +266,7 @@ router.post('/complete-profile', async (req, res) => {
     }
 
     const names = { ...nameParts(clerkUser), middleName: data.middleName || undefined };
-    const student = await Student.create({
+    const student = new Student({
       clerkId: userId,
       studentNumber,
       ...names,
@@ -161,6 +275,8 @@ router.post('/complete-profile', async (req, res) => {
       avatarUrl: clerkUser.imageUrl || undefined,
       ...data,
     });
+    applyGuardianLinks(student);
+    await student.save();
 
     res.status(201).json({ student });
   } catch (err) {
@@ -189,8 +305,13 @@ router.patch('/me', async (req, res) => {
     if (error) {
       return res.status(400).json({ error });
     }
+    const lockedError = verifiedChangeError(student, data);
+    if (lockedError) {
+      return res.status(409).json({ error: lockedError });
+    }
 
     Object.assign(student, data);
+    applyGuardianLinks(student);
     // A changed middle name updates the full name, as long as the record
     // has its first/last parts (older records keep their name until backfilled).
     if (data.middleName !== undefined && (student.firstName || student.lastName)) {
@@ -219,4 +340,70 @@ router.patch('/me', async (req, res) => {
   }
 });
 
+// POST /api/students/me/correction-requests  { group, message }
+// A student asks the office to correct a verified group of academic
+// details (they can't edit it themselves). The office's queue for these
+// is a follow-up (see HANDOFF.md).
+router.post('/me/correction-requests', async (req, res) => {
+  try {
+    const { userId } = getAuth(req);
+    if (!userId) return res.status(401).json({ error: 'Not authenticated.' });
+    const student = await Student.findOne({ clerkId: userId });
+    if (!student) return res.status(404).json({ error: 'Complete your profile first.' });
+
+    const group = req.body?.group;
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+    if (!GROUP_FIELDS[group]) return res.status(400).json({ error: 'Choose what needs correcting.' });
+    if (!message) return res.status(400).json({ error: 'Tell the office what should be corrected.' });
+    if (message.length > 1000) return res.status(400).json({ error: 'Keep the request under 1000 characters.' });
+    if (student.correctionRequests.some(r => r.group === group && r.status === 'open')) {
+      return res.status(409).json({ error: 'You already have an open request for this. The office will get back to you.' });
+    }
+
+    student.correctionRequests.push({ group, message });
+    await student.save();
+    res.status(201).json({ student });
+  } catch (err) {
+    console.error('Correction request error:', err);
+    res.status(500).json({ error: 'Failed to send the request.' });
+  }
+});
+
+// PATCH /api/students/:studentNumber/verification  { group, verified }
+// AdSO only: marks a group of a student's academic details as verified
+// (locking it from student edits) or back to self-reported. Verifying
+// resolves any open correction request for that group.
+router.patch('/:studentNumber/verification', requireAdso, async (req, res) => {
+  try {
+    const { group, verified } = req.body || {};
+    if (!GROUP_FIELDS[group]) return res.status(400).json({ error: `Group must be one of: ${Object.keys(GROUP_FIELDS).join(', ')}.` });
+    const student = await Student.findOne({ studentNumber: req.params.studentNumber });
+    if (!student) return res.status(404).json({ error: 'Student not found.' });
+
+    if (verified === true) {
+      student.set(`verification.${group}`, {
+        verifiedAt: new Date(),
+        verifiedBy: req.adminUser.email,
+        verifiedByName: req.adminUser.name,
+        office: req.adminUser.office,
+      });
+      for (const r of student.correctionRequests) {
+        if (r.group === group && r.status === 'open') {
+          r.status = 'resolved';
+          r.resolvedAt = new Date();
+          r.resolvedBy = req.adminUser.email;
+        }
+      }
+    } else {
+      student.set(`verification.${group}`, undefined);
+    }
+    await student.save();
+    res.json({ student });
+  } catch (err) {
+    console.error('Verification update error:', err);
+    res.status(500).json({ error: 'Failed to update verification.' });
+  }
+});
+
 module.exports = router;
+module.exports.normalizePhMobile = normalizePhMobile;
