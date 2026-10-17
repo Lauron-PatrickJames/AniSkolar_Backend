@@ -32,6 +32,7 @@ const PROGRAMS = [
   ['BSECE', 'Bachelor of Science in Electronics Engineering', 'CEAT'],
   ['BSIE', 'Bachelor of Science in Industrial Engineering', 'CEAT'],
   ['BSME', 'Bachelor of Science in Mechanical Engineering', 'CEAT'],
+  ['BSEnSE', 'Bachelor of Science in Environmental and Sanitary Engineering', 'CEAT'],
   ['BMMA', 'Bachelor of Multimedia Arts', 'CEAT'],
   ['BSCS', 'Bachelor of Science in Computer Science', 'CICS'],
   ['BSIT', 'Bachelor of Science in Information Technology', 'CICS'],
