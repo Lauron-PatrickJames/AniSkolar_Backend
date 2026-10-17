@@ -6,7 +6,7 @@ const { applicationUpload } = require('../middleware/uploadConfig');
 const { requireAdmin, requireAdso } = require('../middleware/requireAdmin');
 const { requireStudent, requireStudentOrAdmin, SFAG_ID } = require('../middleware/requireStudent');
 const Renewal = require('../models/Renewal');
-const { getBucket, storeFilesInGridFS } = require('../utils/gridfs');
+const { openFile, storeFilesInGridFS } = require('../utils/gridfs');
 const Application = require('../models/Application');
 const ApplicationDraft = require('../models/ApplicationDraft');
 const ScholarshipSetting = require('../models/ScholarshipSetting');
@@ -1034,7 +1034,8 @@ router.patch('/:id/admin-fields', requireAdmin, async (req, res) => {
   }
 });
 
-// GET a single stored document back out of GridFS, e.g. for SFAG staff review
+// GET a single stored document (Azure Blob Storage or GridFS, see
+// utils/gridfs.js), e.g. for SFAG staff review
 // or for the student to preview what they uploaded. Application and
 // renewal documents share the bucket. A student gets only their own
 // files; an admin, files on applications or renewals their office can see.
@@ -1042,7 +1043,6 @@ router.patch('/:id/admin-fields', requireAdmin, async (req, res) => {
 // (not a plain link), so it has to be requested by fetch().
 router.get('/documents/:fileId', requireStudentOrAdmin, async (req, res) => {
   try {
-    const bucket = getBucket();
     let fileId;
     try {
       fileId = new ObjectId(req.params.fileId);
@@ -1054,18 +1054,19 @@ router.get('/documents/:fileId', requireStudentOrAdmin, async (req, res) => {
       return res.status(404).json({ error: 'File not found.' });
     }
 
-    const matches = await bucket.find({ _id: fileId }).toArray();
-    if (!matches.length) {
+    const file = await openFile(fileId);
+    if (!file) {
       return res.status(404).json({ error: 'File not found.' });
     }
 
-    res.set('Content-Type', matches[0].metadata?.mimetype || 'image/jpeg');
-    bucket
-      .openDownloadStream(fileId)
-      .pipe(res)
-      .on('error', () => res.status(500).end());
+    res.set('Content-Type', file.contentType || 'image/jpeg');
+    // Personal documents: never cached by shared caches.
+    res.set('Cache-Control', 'private, no-store');
+    file.stream
+      .on('error', () => { if (!res.headersSent) res.status(500).end(); else res.end(); })
+      .pipe(res);
   } catch (err) {
-    console.error('GridFS download failed:', err);
+    console.error('Document download failed:', err);
     res.status(500).json({ error: 'Could not retrieve file.' });
   }
 });

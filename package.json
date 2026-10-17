@@ -9,6 +9,7 @@
   "keywords": [],
   "type": "commonjs",
   "dependencies": {
+    "@azure/storage-blob": "^12.34.0",
     "@clerk/express": "^2.1.49",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
