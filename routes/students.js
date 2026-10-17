@@ -4,6 +4,8 @@ const { getAuth, clerkClient } = require('@clerk/express');
 const Student = require('../models/Student');
 const { findProgram, YEAR_LEVELS } = require('../data/programs');
 const { requireAdso } = require('../middleware/requireAdmin');
+const { requireStudent } = require('../middleware/requireStudent');
+const { EXCLUSIVE_SCHOLARSHIP_ID, findHeldScholarships } = require('../utils/exclusivity');
 
 const ALLOWED_EMAIL_DOMAIN = '@dlsud.edu.ph';
 
@@ -218,6 +220,19 @@ router.get('/me', async (req, res) => {
   } catch (err) {
     console.error('Fetch profile error:', err);
     res.status(500).json({ error: 'Failed to fetch profile.' });
+  }
+});
+
+// GET /api/students/me/holdings — scholarships the signed-in student holds
+// now, and whether one of them rules out applying for others (SFAG).
+router.get('/me/holdings', requireStudent, async (req, res) => {
+  try {
+    const held = await findHeldScholarships(req.studentNumber);
+    const exclusive = held.find(s => s.scholarshipId === EXCLUSIVE_SCHOLARSHIP_ID) ?? null;
+    res.json({ held, exclusive });
+  } catch (err) {
+    console.error('Fetch holdings error:', err);
+    res.status(500).json({ error: 'Failed to load your scholarships.' });
   }
 });
 

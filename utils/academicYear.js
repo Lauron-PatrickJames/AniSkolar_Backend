@@ -3,7 +3,7 @@
 // two in sync.
 //
 // DLSU-D's academic year starts in August, but scholarship applications
-// (Entrance, SFA Grant) open June 1–20 for the coming year, so a cycle runs
+// (Entrance June 1–20, SFAG June 16 – July 3 in 2026) open in June for the coming year, so a cycle runs
 // June through May, in Philippine time: an application in June 2026 belongs
 // to AY 2026–2027; one in March 2026 to AY 2025–2026.
 
@@ -43,4 +43,14 @@ function academicYearStartExpr(dateField = '$createdAt') {
   };
 }
 
-module.exports = { ACADEMIC_YEAR_START_MONTH, TIMEZONE, academicYearStart, isReturning, academicYearStartExpr };
+// The SFAG takes new applications only in June and July (Philippine
+// time), before the 1st semester enrollment; the rest of the year is for
+// renewals only. Within the window the AdSO's Open / Closed status still
+// decides. Mirrors inSfagApplicationWindow() in the frontend's
+// src/utils/eligibility.ts.
+function inSfagApplicationWindow(date = new Date()) {
+  const month = Number(new Intl.DateTimeFormat('en-US', { timeZone: TIMEZONE, month: 'numeric' }).format(new Date(date)));
+  return month === 6 || month === 7;
+}
+
+module.exports = { ACADEMIC_YEAR_START_MONTH, TIMEZONE, academicYearStart, isReturning, academicYearStartExpr, inSfagApplicationWindow };

@@ -6,6 +6,7 @@ const mongoose = require('mongoose');
 // AnnouncementCard simply ignores since it only reads the fields it knows.
 
 const CATEGORIES = ['General', 'Update', 'Deadline', 'Event'];
+const STATUSES = ['draft', 'scheduled', 'published'];
 const MAX_IMAGES = 10;
 
 const imageSchema = new mongoose.Schema(
@@ -48,10 +49,16 @@ const announcementSchema = new mongoose.Schema(
     // Admin-only: lets an announcement be written and saved without
     // immediately showing on the student feed. Not part of the frontend
     // Announcement type — GET /feed only returns status: 'published'.
+    // 'scheduled' publishes itself at scheduledFor (publishDueAnnouncements
+    // in routes/announcements.js).
     status: {
       type: String,
-      enum: ['draft', 'published'],
+      enum: STATUSES,
       default: 'draft'
+    },
+    scheduledFor: {
+      type: Date,
+      default: null
     },
     // Admin-only: surfaces above the regular feed order when true. Not part
     // of the frontend Announcement type.
@@ -113,6 +120,7 @@ const announcementSchema = new mongoose.Schema(
 );
 
 announcementSchema.index({ status: 1, isPinned: -1, publishedAt: -1 });
+announcementSchema.index({ status: 1, scheduledFor: 1 });
 
 // Upgrades announcements saved with a single image to the images array, in
 // memory; the change is written the next time the document is saved.
@@ -160,6 +168,7 @@ announcementSchema.methods.toClientShape = function toClientShape() {
     status: this.status,
     isPinned: this.isPinned,
     publishedAt: this.publishedAt,
+    scheduledFor: this.scheduledFor,
     createdBy: this.createdBy,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
@@ -191,4 +200,5 @@ announcementSchema.methods.toFeedShape = function toFeedShape() {
 
 module.exports = mongoose.model('Announcement', announcementSchema);
 module.exports.CATEGORIES = CATEGORIES;
+module.exports.STATUSES = STATUSES;
 module.exports.MAX_IMAGES = MAX_IMAGES;
