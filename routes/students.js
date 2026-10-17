@@ -9,6 +9,16 @@ const { EXCLUSIVE_SCHOLARSHIP_ID, findHeldScholarships } = require('../utils/exc
 
 const ALLOWED_EMAIL_DOMAIN = '@dlsud.edu.ph';
 
+// DLSU-D student numbers: the 4-digit year the student first enrolled at
+// DLSU-D (possibly in high school, kept into college), then 5
+// digits, e.g. 202330864. Same rule as CompleteProfilePage in the frontend.
+// The year is NOT the college entry year, so it says nothing about year level.
+function validStudentNumber(value) {
+  if (typeof value !== 'string' || !/^\d{9}$/.test(value.trim())) return false;
+  const year = Number(value.trim().slice(0, 4));
+  return year >= 1990 && year <= new Date().getFullYear() + 1;
+}
+
 // Fields a student is allowed to set themselves. studentNumber, clerkId,
 // name, and email are deliberately excluded — those are identity fields
 // tied to Clerk/verification, not editable profile data. Course and
@@ -265,10 +275,14 @@ router.post('/complete-profile', async (req, res) => {
       return res.status(403).json({ error: 'Please use your official university email.' });
     }
 
-    const { studentNumber } = req.body;
-    if (!studentNumber || !String(studentNumber).trim()) {
+    if (!req.body.studentNumber) {
       return res.status(400).json({ error: 'Student number is required.' });
     }
+    // Also rejects non-strings, so the value is safe to use in a query.
+    if (!validStudentNumber(req.body.studentNumber)) {
+      return res.status(400).json({ error: 'Student numbers have 9 digits and start with the year you entered, like 202312345.' });
+    }
+    const studentNumber = req.body.studentNumber.trim();
 
     const duplicate = await Student.findOne({ studentNumber });
     if (duplicate) {
