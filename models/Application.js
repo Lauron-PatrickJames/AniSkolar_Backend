@@ -104,6 +104,13 @@ const applicationSchema = new mongoose.Schema({
 
   adminFields: { type: adminFieldsSchema },
 
+  // SFAG only: the tuition discount granted (100 / 75 / 50 / 25), recorded
+  // by the AdSO once approved. Decides the scholar's duty hours
+  // (models/DutySetting.js). Students see their own.
+  sfagPercentage: { type: Number, enum: [100, 75, 50, 25] },
+  sfagPercentageSetBy: String,
+  sfagPercentageSetAt: Date,
+
   // Set when a POLCA / Alumni office approves the application, which sends
   // it to the AdSO ('LSO') automatically (PATCH /api/applications/:id/status).
   // Until then the AdSO can't see it; see utils/officeScope.js. Always unset

@@ -74,7 +74,7 @@ Each scholarship in `data/scholarships.js` belongs to an office (`LSO` = AdSO, `
 
 | Clerk public metadata | Sees |
 |---|---|
-| `{ "role": "admin", "office": "ADSO" }` | The Admissions and Scholarship Office (AdSO): its own applications (SFA Grant, Entrance) plus whatever POLCA and Alumni have sent over |
+| `{ "role": "admin", "office": "ADSO" }` | The Admissions and Scholarship Office (AdSO): its own applications (SFAG, Entrance) plus whatever POLCA and Alumni have sent over |
 | `{ "role": "admin", "office": "POLCA" }` | Only POLCA applications |
 | `{ "role": "admin", "office": "ALUMNI" }` | Only Alumni Association applications |
 

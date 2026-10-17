@@ -52,10 +52,10 @@ function summarize(log, today) {
   };
 }
 
-// Validates a scholar's whole log. Returns { log } or { error }.
+// Validates a scholar's whole log. Returns { log } or { error }. The
+// office isn't part of it — the AdSO assigns that.
 function parseLog(body) {
   const out = {};
-  out.officeAssigned = typeof body.officeAssigned === 'string' ? body.officeAssigned.trim().slice(0, 200) : '';
 
   if (body.deadline === '' || body.deadline === null || body.deadline === undefined) out.deadline = undefined;
   else if (!isValidDate(body.deadline)) return { error: 'Enter a valid deadline.' };

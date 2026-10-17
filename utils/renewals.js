@@ -3,7 +3,7 @@ const Renewal = require('../models/Renewal');
 const RenewalPeriod = require('../models/RenewalPeriod');
 const { academicYearStartExpr } = require('./academicYear');
 
-// Department head's Student Assistant evaluation (SFA Grant), from the
+// Department head's Student Assistant evaluation (SFAG), from the
 // office's "Performance Evaluation of Student Financial Aid Grantees" form.
 // Each item is rated 1–5. The interview says the form has 19 items; the
 // copy in the NG manuscript (Appendix G) only shows these 15, so the rest

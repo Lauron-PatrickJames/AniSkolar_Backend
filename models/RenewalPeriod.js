@@ -24,7 +24,7 @@ const renewalPeriodSchema = new mongoose.Schema({
   // Retention rule shown to scholars and checked on the admin list:
   // a GPA (0.0–4.0, higher is better) of at least this much.
   minGpa: { type: Number, min: 0, max: 4 },
-  // Whether the scholar's department head evaluation (the SFA Grant's
+  // Whether the scholar's department head evaluation (the SFAG's
   // 1–5 Student Assistant rating) is part of this renewal.
   requiresEvaluation: { type: Boolean, default: false },
   // Documents the scholar uploads, one label each, e.g.

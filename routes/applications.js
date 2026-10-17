@@ -3,7 +3,9 @@ const router = express.Router();
 const multer = require('multer');
 const { ObjectId } = require('mongodb');
 const { applicationUpload } = require('../middleware/uploadConfig');
-const { requireAdmin } = require('../middleware/requireAdmin');
+const { requireAdmin, requireAdso } = require('../middleware/requireAdmin');
+const { requireStudent, requireStudentOrAdmin, SFAG_ID } = require('../middleware/requireStudent');
+const Renewal = require('../models/Renewal');
 const { getBucket, storeFilesInGridFS } = require('../utils/gridfs');
 const Application = require('../models/Application');
 const ApplicationDraft = require('../models/ApplicationDraft');
@@ -11,8 +13,9 @@ const ScholarshipSetting = require('../models/ScholarshipSetting');
 const Student = require('../models/Student');
 const { findScholarship, acceptsOnlineApplications } = require('../data/scholarships');
 const { officeFilter, scopedOffice } = require('../utils/officeScope');
-const { academicYearStartExpr } = require('../utils/academicYear');
+const { academicYearStartExpr, inSfagApplicationWindow } = require('../utils/academicYear');
 const { nextReferenceCode } = require('../utils/referenceCode');
+const { otherScholarshipsHeld } = require('../utils/exclusivity');
 const {
   isGrantFormType,
   parseGrantSections,
@@ -54,12 +57,32 @@ function joinNameParts(partsExpr) {
 }
 
 // Office-use data that applicants never see.
-const STUDENT_HIDDEN_FIELDS = '-adminFields -internalNotes';
+const SFAG_WINDOW_MESSAGE = 'SFAG applications are only accepted in June and July, before the 1st semester enrollment. The rest of the year is for renewals only.';
+
+const STUDENT_HIDDEN_FIELDS = '-adminFields -internalNotes -sfagPercentageSetBy';
 
 // The applicant's name on an application always comes from their Student
 // record (first and last from the university account, middle from the
 // profile) — never from what the form sent, and never split from a full
 // name. Records without name parts yet are left as submitted.
+// Whether the signed-in student / admin may read a stored file: it must be
+// on one of the student's own applications or renewals, or (admins) on an
+// application or renewal within their office's scope.
+async function canReadDocument(req, fileId) {
+  if (req.studentNumber) {
+    const [app, renewal] = await Promise.all([
+      Application.exists({ 'documents.fileId': fileId, studentNumber: req.studentNumber }),
+      Renewal.exists({ 'documents.fileId': fileId, studentNumber: req.studentNumber }),
+    ]);
+    return Boolean(app || renewal);
+  }
+  if (await Application.exists({ 'documents.fileId': fileId, ...officeFilter(req.adminUser) })) return true;
+  const renewal = await Renewal.findOne({ 'documents.fileId': fileId }).select('scholarshipId').lean();
+  if (!renewal) return false;
+  const office = scopedOffice(req.adminUser);
+  return !office || findScholarship(renewal.scholarshipId)?.office === office;
+}
+
 async function stampStudentNames(studentNumber, application) {
   const student = await Student.findOne({ studentNumber }).select('firstName middleName lastName').lean();
   if (!student?.firstName || !student?.lastName) return;
@@ -69,7 +92,7 @@ async function stampStudentNames(studentNumber, application) {
   }
   if (application.personalInfo) {
     const info = { ...application.personalInfo, firstName: student.firstName, lastName: student.lastName };
-    // The SFA form has a middle initial; the grant forms a middle name.
+    // The SFAG form has a middle initial; the grant forms a middle name.
     if ('middleInitial' in info) info.middleInitial = middle.charAt(0).toUpperCase();
     else info.middleName = middle;
     application.personalInfo = info;
@@ -103,7 +126,9 @@ function validateGrantSubmission(scholarship, body, presentSlotKeys) {
   return { sections };
 }
 
-router.post('/', (req, res) => {
+// The applicant is always the signed-in student (requireStudent); a
+// studentNumber in the body is ignored.
+router.post('/', requireStudent, (req, res) => {
   uploadDocs(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
@@ -115,8 +140,8 @@ router.post('/', (req, res) => {
     }
 
     try {
+      const studentNumber = req.studentNumber;
       const {
-        studentNumber,
         scholarshipId,
         applicationFormType,
         standardInfo,
@@ -130,8 +155,8 @@ router.post('/', (req, res) => {
         documentMeta,
       } = req.body;
 
-      if (!studentNumber || !scholarshipId) {
-        return res.status(400).json({ error: 'Missing student number or scholarship reference.' });
+      if (!scholarshipId) {
+        return res.status(400).json({ error: 'Missing scholarship reference.' });
       }
 
       // Name, office and (for grant forms) form type come from the
@@ -149,6 +174,16 @@ router.post('/', (req, res) => {
       if (setting?.status === 'Closed') {
         return res.status(400).json({ error: 'This scholarship is closed and is no longer accepting applications.' });
       }
+
+      // The SFAG takes applications in June and July only (before the 1st
+      // semester enrollment); the rest of the year is for renewals.
+      if (scholarshipId === SFAG_ID && !inSfagApplicationWindow()) {
+        return res.status(400).json({ error: SFAG_WINDOW_MESSAGE });
+      }
+
+      // Applying is never blocked by another scholarship: only one
+      // internally funded scholarship can be held, and the student chooses
+      // if two are approved (see the approval check and utils/exclusivity.js).
 
       if (!req.files || req.files.length === 0) {
         return res.status(400).json({ error: 'Please upload all required documents.' });
@@ -249,17 +284,9 @@ router.post('/', (req, res) => {
 // 'Under Evaluation' and clears any prior reviewNote/reviewedBy/reviewedAt
 // so the LSO sees it as freshly awaiting review.
 //
-// NOTE ON AUTH: this currently checks ownership by comparing
-// req.body.studentNumber against the stored studentNumber, which is
-// spoofable by anyone crafting the multipart body themselves. Your POST /
-// route's comment says studentNumber for creation is "taken from the
-// authenticated Student record server-side, never from req.body" — this
-// route should get the same treatment (pull studentNumber from whatever
-// auth/session middleware you use, e.g. req.auth.studentNumber, instead
-// of trusting the body) before this goes to production. Left as a
-// same-shape placeholder here since I don't have your auth middleware's
-// exact shape.
-router.patch('/:id', (req, res) => {
+// Only the signed-in student who owns the application can resubmit it
+// (requireStudent); anyone else gets 404, as if it didn't exist.
+router.patch('/:id', requireStudent, (req, res) => {
   uploadDocs(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
@@ -278,15 +305,9 @@ router.patch('/:id', (req, res) => {
         return res.status(400).json({ error: 'Invalid application id.' });
       }
 
-      const existing = await Application.findById(objectId);
+      const existing = await Application.findOne({ _id: objectId, studentNumber: req.studentNumber });
       if (!existing) {
         return res.status(404).json({ error: 'Application not found.' });
-      }
-
-      // See NOTE ON AUTH above — replace with your real auth-derived
-      // studentNumber once wired up.
-      if (req.body.studentNumber && existing.studentNumber !== req.body.studentNumber) {
-        return res.status(403).json({ error: 'Not authorized to edit this application.' });
       }
 
       const {
@@ -411,10 +432,15 @@ router.patch('/:id', (req, res) => {
   });
 });
 
-// GET a student's applications, by student number
-router.get('/student/:studentNumber', async (req, res) => {
+// GET a student's applications, by student number. A student can only
+// list their own; an admin, the ones their office can see.
+router.get('/student/:studentNumber', requireStudentOrAdmin, async (req, res) => {
   try {
-    const applications = await Application.find({ studentNumber: req.params.studentNumber })
+    if (req.studentNumber && req.params.studentNumber !== req.studentNumber) {
+      return res.status(403).json({ error: 'You can only view your own applications.' });
+    }
+    const scope = req.adminUser ? officeFilter(req.adminUser) : {};
+    const applications = await Application.find({ studentNumber: req.params.studentNumber, ...scope })
       .select(STUDENT_HIDDEN_FIELDS)
       .sort({ createdAt: -1 });
     res.json({ applications });
@@ -493,7 +519,7 @@ router.get('/export/scholars', requireAdmin, async (req, res) => {
         $addFields: {
           studentNumber: '$_id',
           // First, middle and last name joined with single spaces (the
-          // middle part is middleName, or the SFA form's middle initial).
+          // middle part is middleName, or the SFAG form's middle initial).
           name: joinNameParts({
             $cond: [
               { $in: ['$latestApplication.applicationFormType', ['sfag', 'polca', 'alumni']] },
@@ -668,7 +694,8 @@ router.get('/export/scholars', requireAdmin, async (req, res) => {
 // GET /api/applications/:id — fetch a single application in full. Added so
 // fetchFullApplication (App.tsx) has a real endpoint to hit instead of
 // 404ing and silently falling back to the list-endpoint summary.
-router.get('/:id', async (req, res) => {
+// The owner, or an admin whose office can see it; anyone else gets 404.
+router.get('/:id', requireStudentOrAdmin, async (req, res) => {
   try {
     let objectId;
     try {
@@ -677,7 +704,8 @@ router.get('/:id', async (req, res) => {
       return res.status(400).json({ error: 'Invalid application id.' });
     }
 
-    const application = await Application.findById(objectId).select(STUDENT_HIDDEN_FIELDS);
+    const owner = req.studentNumber ? { studentNumber: req.studentNumber } : officeFilter(req.adminUser);
+    const application = await Application.findOne({ _id: objectId, ...owner }).select(STUDENT_HIDDEN_FIELDS);
     if (!application) {
       return res.status(404).json({ error: 'Application not found.' });
     }
@@ -812,6 +840,21 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
       }
     }
 
+    // Only one internally funded scholarship can be held. Approving another
+    // for a student who already holds one needs the AdSO to acknowledge it;
+    // the student then chooses which to keep (usually the bigger grant).
+    if (status === 'Approved' && req.body.acknowledgeOtherScholarship !== true) {
+      const others = await otherScholarshipsHeld(application.studentNumber, application.scholarshipId, { excludeApplicationId: application._id });
+      if (others.length) {
+        const names = others.map(o => o.scholarshipName);
+        return res.status(409).json({
+          code: 'holds_other_scholarship',
+          held: names,
+          error: `This student already holds the ${names.join(' and the ')}. Only one internally funded scholarship can be credited; if you approve this one, the student chooses which to keep (usually the bigger grant).`,
+        });
+      }
+    }
+
     // Records which office made this decision ('LSO' on an office
     // application = an AdSO override).
     if (status !== application.status) {
@@ -909,6 +952,42 @@ router.post('/:id/internal-notes', requireAdmin, async (req, res) => {
 // form's office-use box (Date Received, Received By, New/Old applicant,
 // GPA). Only POLCA applications have these fields. Send null/'' to clear
 // a field.
+// PATCH /api/applications/:id/sfag-percentage — AdSO only. Records the
+// grant percentage on an approved SFAG application: { percentage: 100 |
+// 75 | 50 | 25 | null }. It sets the scholar's duty hours.
+router.patch('/:id/sfag-percentage', requireAdso, async (req, res) => {
+  try {
+    let objectId;
+    try {
+      objectId = new ObjectId(req.params.id);
+    } catch {
+      return res.status(400).json({ error: 'Invalid application id.' });
+    }
+    const application = await Application.findOne({ _id: objectId, ...officeFilter(req.adminUser) });
+    if (!application) return res.status(404).json({ error: 'Application not found.' });
+    if (application.scholarshipId !== SFAG_ID) return res.status(400).json({ error: 'Only SFAG applications have a grant percentage.' });
+    if (application.status !== 'Approved') return res.status(409).json({ error: 'Approve the application before setting its grant percentage.' });
+
+    const { percentage } = req.body || {};
+    if (percentage === null || percentage === '') {
+      application.sfagPercentage = undefined;
+      application.sfagPercentageSetBy = undefined;
+      application.sfagPercentageSetAt = undefined;
+    } else {
+      const value = Number(percentage);
+      if (![100, 75, 50, 25].includes(value)) return res.status(400).json({ error: 'The grant percentage must be 100, 75, 50 or 25.' });
+      application.sfagPercentage = value;
+      application.sfagPercentageSetBy = req.adminUser.email || req.adminUser.id;
+      application.sfagPercentageSetAt = new Date();
+    }
+    await application.save();
+    res.json({ application });
+  } catch (err) {
+    console.error('Set SFAG percentage error:', err);
+    res.status(500).json({ error: 'Failed to save the grant percentage.' });
+  }
+});
+
 router.patch('/:id/admin-fields', requireAdmin, async (req, res) => {
   try {
     let objectId;
@@ -956,8 +1035,12 @@ router.patch('/:id/admin-fields', requireAdmin, async (req, res) => {
 });
 
 // GET a single stored document back out of GridFS, e.g. for SFAG staff review
-// or for the student to preview what they uploaded.
-router.get('/documents/:fileId', async (req, res) => {
+// or for the student to preview what they uploaded. Application and
+// renewal documents share the bucket. A student gets only their own
+// files; an admin, files on applications or renewals their office can see.
+// Anyone else gets 404. The browser fetches it with the session token
+// (not a plain link), so it has to be requested by fetch().
+router.get('/documents/:fileId', requireStudentOrAdmin, async (req, res) => {
   try {
     const bucket = getBucket();
     let fileId;
@@ -965,6 +1048,10 @@ router.get('/documents/:fileId', async (req, res) => {
       fileId = new ObjectId(req.params.fileId);
     } catch {
       return res.status(400).json({ error: 'Invalid file id.' });
+    }
+
+    if (!(await canReadDocument(req, fileId))) {
+      return res.status(404).json({ error: 'File not found.' });
     }
 
     const matches = await bucket.find({ _id: fileId }).toArray();

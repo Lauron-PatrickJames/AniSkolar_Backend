@@ -85,11 +85,20 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 mongoose.connect(process.env.MONGODB_URI)
-  .then(() => {
+  .then(async () => {
     console.log('✅ MongoDB Atlas connected');
+    // Scholarships the AdSO created (kept in memory for findScholarship),
+    // loaded before the first request.
+    await require('./utils/customScholarships').load()
+      .catch(err => console.error('Loading created scholarships failed:', err));
     app.listen(PORT, () => {
       console.log(`🚀 Server running on http://localhost:${PORT}`);
     });
+    // Scheduled announcements: publish any that are due, now and every minute.
+    const publishDue = () => announcementRoutes.publishDueAnnouncements()
+      .catch(err => console.error('Publishing scheduled announcements failed:', err));
+    publishDue();
+    setInterval(publishDue, 60_000);
   })
   .catch(err => {
     console.error('❌ MongoDB connection error:', err.message);

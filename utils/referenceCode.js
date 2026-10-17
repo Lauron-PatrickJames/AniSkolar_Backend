@@ -1,7 +1,7 @@
 // Application reference numbers: <CODE>-<YEAR>-<SEQ>, e.g. ENT-2026-0001.
 //
 //   CODE  the scholarship's short code from data/scholarships.js
-//         (referenceCode: 'ENT', 'SFA', 'PSEF', 'DAA', 'EBPSP')
+//         (referenceCode: 'ENT', 'SFAG', 'PSEF', 'DAA', 'EBPSP')
 //   YEAR  the academic year the application belongs to, by its start year
 //         (AY 2026–2027 → 2026; see utils/academicYear.js)
 //   SEQ   a counter per code and year, zero-padded to 4 digits (it simply
