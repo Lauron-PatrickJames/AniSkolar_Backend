@@ -1,12 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { Readable } = require('stream');
 const { ObjectId } = require('mongodb');
 const Announcement = require('../models/Announcement');
 const { requireAdso } = require('../middleware/requireAdmin');
 const { announcementImageUpload } = require('../middleware/uploadConfig');
-const { getBucket } = require('../utils/gridfs');
+const { putFile, openFile, readFile, deleteFile } = require('../utils/gridfs');
 const facebook = require('../services/facebook');
 const { findScholarship } = require('../data/scholarships');
 
@@ -92,16 +91,12 @@ function parseKeepImageIds(value) {
 }
 
 function storeImage(file) {
-  return new Promise((resolve, reject) => {
-    const upload = getBucket().openUploadStream(file.originalname, {
-      metadata: { kind: 'announcement-image', mimetype: file.mimetype },
-    });
-    Readable.from(file.buffer).pipe(upload).on('error', reject).on('finish', () => resolve(upload.id));
-  });
+  return putFile({ buffer: file.buffer, filename: file.originalname, mimetype: file.mimetype, metadata: { kind: 'announcement-image' } });
 }
 
-// Stores uploaded files in GridFS, pushing each entry onto `stored` as it
-// lands so the caller can clean up if a later one fails.
+// Stores uploaded images (utils/gridfs.js: Azure or GridFS), pushing each
+// entry onto `stored` as it lands so the caller can clean up if a later
+// one fails.
 async function storeImages(files, stored) {
   for (const file of files || []) {
     const fileId = await storeImage(file);
@@ -119,22 +114,15 @@ async function discardUnsaved(stored) {
 }
 
 function readImage(fileId) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    getBucket()
-      .openDownloadStream(fileId)
-      .on('data', (chunk) => chunks.push(chunk))
-      .on('error', reject)
-      .on('end', () => resolve(Buffer.concat(chunks)));
-  });
+  return readFile(fileId);
 }
 
 async function deleteImage(fileId) {
   if (!fileId) return;
   try {
-    await getBucket().delete(fileId);
+    await deleteFile(fileId);
   } catch (err) {
-    console.error('Failed to delete announcement image from GridFS:', err.message);
+    console.error('Failed to delete announcement image:', err.message);
   }
 }
 
@@ -316,11 +304,12 @@ async function sendImage(req, res, fileId) {
     const doc = await Announcement.findById(objectId).select('images imageFileId imageFilename imageMimetype');
     const image = fileId ? doc?.images.find(img => String(img.fileId) === fileId) : doc?.images[0];
     if (!image) return res.status(404).json({ error: 'Image not found.' });
-    res.set('Content-Type', image.mimetype || 'image/jpeg');
+    const file = await openFile(image.fileId);
+    if (!file) return res.status(404).json({ error: 'Image not found.' });
+    res.set('Content-Type', image.mimetype || file.contentType || 'image/jpeg');
     // Each file id's bytes never change, so the URL can be cached for long.
     res.set('Cache-Control', fileId ? 'public, max-age=86400, immutable' : 'public, max-age=300');
-    getBucket()
-      .openDownloadStream(image.fileId)
+    file.stream
       .on('error', () => { if (!res.headersSent) res.status(404).json({ error: 'Image not found.' }); else res.end(); })
       .pipe(res);
   } catch (err) {

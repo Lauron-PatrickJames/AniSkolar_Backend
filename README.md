@@ -42,6 +42,25 @@ Create `.env` from `.env.example`, then set:
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_SECRET_KEY`
 - `FRONTEND_ORIGINS` (comma-separated, e.g. `http://localhost:3000`)
+- `AZURE_STORAGE_CONNECTION_STRING`, `AZURE_STORAGE_CONTAINER` (optional; see "File storage")
+
+## File storage
+
+Uploaded documents and announcement images go to **Azure Blob Storage**
+when `AZURE_STORAGE_CONNECTION_STRING` is set, in a private container
+(`AZURE_STORAGE_CONTAINER`, default `aniskolar-files`, created on first
+use). Without it they're stored in MongoDB GridFS, which is fine for local
+development but fills the free Atlas tier quickly. Files are only ever
+served through the API's access checks (`utils/gridfs.js`); reads fall back
+to GridFS for files not moved yet.
+
+Moving existing files from MongoDB to Azure (same ids, so nothing else changes):
+
+```bash
+node scripts/move-files-to-azure.js                       # dry run
+node scripts/move-files-to-azure.js --apply               # copy and verify
+node scripts/move-files-to-azure.js --apply --delete-from-mongodb   # then free MongoDB
+```
 
 ## Run
 
