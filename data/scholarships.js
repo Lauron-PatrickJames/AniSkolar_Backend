@@ -38,7 +38,7 @@ const ALUMNI_INSTITUTIONS = ['DLSU-EAC', 'DLSU-Aguinaldo', 'DLSU-Dasmariñas'];
 const ALUMNI_RELATIONSHIPS = ['Parent', 'Sibling', 'Grandparent', 'Grandchild'];
 
 const SCHOLARSHIPS = [
-  { id: 's1', name: 'Student Financial Aid (SFA) Grant', office: 'LSO', formType: 'sfag', referenceCode: 'SFA' },
+  { id: 's1', name: 'Student Financial Aid Grant (SFAG)', office: 'LSO', formType: 'sfag', referenceCode: 'SFAG' },
   { id: 's2', name: 'Entrance Scholarship', office: 'LSO', formType: 'standard', referenceCode: 'ENT' },
   {
     id: 's3',
@@ -92,19 +92,27 @@ const SCHOLARSHIPS = [
     ],
   },
   { id: 's5', name: 'Academic Scholarship', office: 'LSO', applicationMode: 'info' },
-  { id: 's6', name: 'Employee Benefit Privilege Scholarship Program (EBPSP)', office: 'LSO', formType: 'standard', referenceCode: 'EBPSP' },
+  { id: 's6', name: 'Enhanced Brother President Scholarship Program (EBPSP)', office: 'LSO', formType: 'standard', referenceCode: 'EBPSP' },
   { id: 's7', name: 'Athletic Scholarship', office: 'LSO', applicationMode: 'info' },
   { id: 's8', name: 'Vicissitude Scholarship Program', office: 'LSO', applicationMode: 'info' },
-  { id: 's9', name: 'Performing Arts Group (PAG) Scholarship', office: 'LSO', applicationMode: 'info' },
+  // s9 (Performing Arts Group) was removed: PAG declined to partner with AniSkolar.
   { id: 's10', name: '267th NROTC Scholarship', office: 'LSO', applicationMode: 'info' },
+  // The USG's own grant, applied for through the USG's form.
+  { id: 's11', name: 'USG Student Financial Aid Grant', office: 'LSO', applicationMode: 'info' },
 ];
 
+// Built-in scholarships, then the ones the AdSO created (standard form;
+// kept in memory by utils/customScholarships.js).
 function findScholarship(scholarshipId) {
-  return SCHOLARSHIPS.find(s => s.id === scholarshipId);
+  return SCHOLARSHIPS.find(s => s.id === scholarshipId) || require('../utils/customScholarships').get(scholarshipId);
+}
+
+function allScholarships() {
+  return [...SCHOLARSHIPS, ...require('../utils/customScholarships').list()];
 }
 
 function acceptsOnlineApplications(scholarship) {
   return (scholarship.applicationMode || 'online') === 'online';
 }
 
-module.exports = { SCHOLARSHIPS, acceptsOnlineApplications, OFFICES, ALUMNI_INSTITUTIONS, ALUMNI_RELATIONSHIPS, findScholarship };
+module.exports = { SCHOLARSHIPS, acceptsOnlineApplications, OFFICES, ALUMNI_INSTITUTIONS, ALUMNI_RELATIONSHIPS, findScholarship, allScholarships };

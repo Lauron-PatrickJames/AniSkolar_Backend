@@ -34,6 +34,20 @@ function parseScholarshipId(value) {
   return { value };
 }
 
+// How far ahead a post can be scheduled.
+const MAX_SCHEDULE_DAYS = 366;
+
+// The publish time for a 'scheduled' announcement: a valid date in the
+// future (a minute's grace for clock skew), at most MAX_SCHEDULE_DAYS
+// ahead. Returns { value } or { error }.
+function parseScheduledFor(value, now = new Date()) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return { error: 'Choose when to publish the announcement.' };
+  if (date.getTime() < now.getTime() - 60_000) return { error: 'The publish time has already passed. Choose a later time, or publish now.' };
+  if (date.getTime() > now.getTime() + MAX_SCHEDULE_DAYS * 86_400_000) return { error: 'Schedule it within the next year.' };
+  return { value: date };
+}
+
 function parseBool(value) {
   if (typeof value === 'boolean') return value;
   if (value === 'true' || value === '1') return true;
@@ -238,15 +252,39 @@ function validationMessage(err) {
   return null;
 }
 
+// Publishes scheduled announcements whose time has come, then posts them to
+// Facebook. Each one is claimed with a single atomic update, so two runs
+// (the timer and a feed request) never publish it twice. Called every
+// minute from server.js and before serving the feed. Returns how many it
+// published.
+async function publishDueAnnouncements(now = new Date()) {
+  let published = 0;
+  for (;;) {
+    const doc = await Announcement.findOneAndUpdate(
+      { status: 'scheduled', scheduledFor: { $lte: now } },
+      [{ $set: { status: 'published', publishedAt: '$scheduledFor', scheduledFor: null } }],
+      { sort: { scheduledFor: 1 }, returnDocument: 'after', updatePipeline: true }
+    );
+    if (!doc) return published;
+    published++;
+    try {
+      const result = await saveAndSync(doc);
+      if (result && !result.ok) console.error(`Scheduled announcement ${doc._id} published, but Facebook failed: ${result.error}`);
+    } catch (err) {
+      console.error(`Scheduled announcement ${doc._id} published, but syncing it failed:`, err);
+    }
+  }
+}
+
 // --- Routes -----------------------------------------------------------------
 
 // GET /api/announcements
 // Admin view: everything (draft + published), pinned first, newest first.
-// Optional ?status=draft|published filter.
+// Optional ?status=draft|scheduled|published filter.
 router.get('/', requireAdso, async (req, res) => {
   try {
     const filter = {};
-    if (req.query.status === 'draft' || req.query.status === 'published') {
+    if (Announcement.STATUSES.includes(req.query.status)) {
       filter.status = req.query.status;
     }
     const docs = await Announcement.find(filter).sort({ isPinned: -1, createdAt: -1 });
@@ -261,6 +299,8 @@ router.get('/', requireAdso, async (req, res) => {
 // like the frontend Announcement type, plus imageUrl and fbPermalink.
 router.get('/feed', async (req, res) => {
   try {
+    // Don't wait for the timer: anything due shows right away.
+    await publishDueAnnouncements().catch(err => console.error('Publishing scheduled announcements failed:', err));
     const docs = await Announcement.find({ status: 'published' }).sort({ isPinned: -1, publishedAt: -1 });
     res.json({ announcements: docs.map(d => d.toFeedShape()) });
   } catch (err) {
@@ -297,9 +337,10 @@ router.get('/:id/image', (req, res) => sendImage(req, res, null));
 // POST /api/announcements
 // JSON or multipart (with optional "images" JPGs, up to MAX_IMAGES). Fields: title,
 // description, content, category, scholarshipId (related scholarship, optional),
-// isPinned, status ('draft' | 'published'),
-// fbEnabled ("Also post to Facebook"). Facebook is only posted to when the
-// announcement is published.
+// isPinned, status ('draft' | 'scheduled' | 'published'), scheduledFor (ISO
+// date-time, for 'scheduled'), fbEnabled ("Also post to Facebook").
+// Facebook is only posted to when the announcement is published — for a
+// scheduled one, when its time comes.
 router.post('/', requireAdso, withImageUpload, async (req, res) => {
   const newImages = [];
   try {
@@ -309,7 +350,12 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
     }
     const related = req.body.scholarshipId === undefined ? { value: null } : parseScholarshipId(req.body.scholarshipId);
     if (related.error) return res.status(400).json({ error: related.error });
+    if (status !== undefined && !Announcement.STATUSES.includes(status)) {
+      return res.status(400).json({ error: 'Status must be draft, scheduled or published.' });
+    }
     const willPublish = status === 'published';
+    const schedule = status === 'scheduled' ? parseScheduledFor(req.body.scheduledFor) : { value: null };
+    if (schedule.error) return res.status(400).json({ error: schedule.error });
     await storeImages(req.files, newImages);
 
     const doc = new Announcement({
@@ -319,8 +365,9 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
       category: category || 'General',
       scholarshipId: related.value,
       isPinned: parseBool(req.body.isPinned) ?? false,
-      status: willPublish ? 'published' : 'draft',
+      status: status === 'scheduled' ? 'scheduled' : willPublish ? 'published' : 'draft',
       publishedAt: willPublish ? new Date() : null,
+      scheduledFor: schedule.value,
       createdBy: req.adminUser.email || req.adminUser.id,
       fbEnabled: parseBool(req.body.fbEnabled) ?? false,
       images: newImages,
@@ -345,7 +392,9 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
 // Partial update (JSON or multipart). Besides the POST fields it accepts
 // keepImageIds (JSON array of existing image ids to keep, in order; omitted
 // keeps them all) and new "images" files, which are added after the kept
-// ones. Draft -> published stamps publishedAt. The Facebook post follows:
+// ones. Draft -> published stamps publishedAt. 'scheduled' needs
+// scheduledFor (also sent alone to move a scheduled post); a published
+// announcement can't be scheduled. The Facebook post follows:
 // text edits update it, changed images recreate it, unpublishing or turning
 // fbEnabled off deletes it.
 router.patch('/:id', requireAdso, withImageUpload, async (req, res) => {
@@ -371,6 +420,22 @@ router.patch('/:id', requireAdso, withImageUpload, async (req, res) => {
     const fbEnabled = parseBool(req.body.fbEnabled);
     if (fbEnabled !== undefined) existing.fbEnabled = fbEnabled;
 
+    if (status !== undefined && !Announcement.STATUSES.includes(status)) {
+      return res.status(400).json({ error: 'Status must be draft, scheduled or published.' });
+    }
+    const nextStatus = status ?? existing.status;
+    if (nextStatus === 'scheduled') {
+      if (existing.status === 'published') {
+        return res.status(409).json({ error: 'This announcement is already published. Unpublish it to a draft first.' });
+      }
+      if (status !== undefined || req.body.scheduledFor !== undefined) {
+        const schedule = parseScheduledFor(req.body.scheduledFor ?? existing.scheduledFor);
+        if (schedule.error) return res.status(400).json({ error: schedule.error });
+        existing.scheduledFor = schedule.value;
+      }
+    } else {
+      existing.scheduledFor = null;
+    }
     if (status !== undefined && status !== existing.status) {
       existing.status = status;
       if (status === 'published' && !existing.publishedAt) {
@@ -462,3 +527,4 @@ router.delete('/:id', requireAdso, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.publishDueAnnouncements = publishDueAnnouncements;
