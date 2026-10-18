@@ -1,6 +1,7 @@
 const Application = require('../models/Application');
 const Renewal = require('../models/Renewal');
 const { academicYearStart } = require('./academicYear');
+const { findScholarship } = require('../data/scholarships');
 
 // One internally funded scholarship at a time (AdSO interview, Oct 2026).
 // Every scholarship in AniSkolar is internally funded. A student may apply
@@ -20,12 +21,14 @@ const EXCLUSIVE_NAME = 'SFAG';
 // approved or renewed this academic year or last (applications for the
 // coming year open in June, while last year's scholars are still on it),
 // unless the latest decision on it is Not Renewed / Not Continuing.
+// Scholarships without renewals (noRenewal, e.g. POLCA) count from
+// approval until the office marks the scholar Graduated / Stopped.
 // Returns [{ scholarshipId, scholarshipName }].
 async function findHeldScholarships(studentNumber, { excludeApplicationId, now = new Date() } = {}) {
   const fromYear = academicYearStart(now) - 1;
   const [applications, renewals] = await Promise.all([
     Application.find({ studentNumber, status: 'Approved', ...(excludeApplicationId ? { _id: { $ne: excludeApplicationId } } : {}) })
-      .select('scholarshipId scholarshipName createdAt reviewedAt').lean(),
+      .select('scholarshipId scholarshipName createdAt reviewedAt endedAt').lean(),
     Renewal.find({ studentNumber, academicYear: { $gte: fromYear }, status: { $in: ['Renewed', 'Not Renewed', 'Not Continuing'] } })
       .select('scholarshipId scholarshipName status updatedAt').lean(),
   ]);
@@ -37,8 +40,14 @@ async function findHeldScholarships(studentNumber, { excludeApplicationId, now =
     if (!prev || at >= prev.at) latest.set(scholarshipId, { scholarshipId, scholarshipName, at, held });
   };
   for (const a of applications) {
+    const approvedAt = new Date(a.reviewedAt || a.createdAt);
+    if (findScholarship(a.scholarshipId)?.noRenewal) {
+      consider(a.scholarshipId, a.scholarshipName, approvedAt, true);
+      if (a.endedAt) consider(a.scholarshipId, a.scholarshipName, new Date(a.endedAt), false);
+      continue;
+    }
     if (academicYearStart(a.createdAt) < fromYear) continue;
-    consider(a.scholarshipId, a.scholarshipName, new Date(a.reviewedAt || a.createdAt), true);
+    consider(a.scholarshipId, a.scholarshipName, approvedAt, true);
   }
   for (const r of renewals) {
     consider(r.scholarshipId, r.scholarshipName, new Date(r.updatedAt), r.status === 'Renewed');

@@ -6,6 +6,8 @@ const { findProgram, YEAR_LEVELS } = require('../data/programs');
 const { requireAdso } = require('../middleware/requireAdmin');
 const { requireStudent } = require('../middleware/requireStudent');
 const { EXCLUSIVE_SCHOLARSHIP_ID, findHeldScholarships } = require('../utils/exclusivity');
+const { collegeSlotsFull } = require('../utils/collegeSlots');
+const { allScholarships } = require('../data/scholarships');
 
 const ALLOWED_EMAIL_DOMAIN = '@dlsud.edu.ph';
 
@@ -234,12 +236,20 @@ router.get('/me', async (req, res) => {
 });
 
 // GET /api/students/me/holdings — scholarships the signed-in student holds
-// now, and whether one of them rules out applying for others (SFAG).
+// now, whether one of them rules out applying for others (SFAG), and the
+// scholarships whose slots for the student's college are full (POLCA):
+// { held, exclusive, slotsFull: [{ scholarshipId, message }] }.
 router.get('/me/holdings', requireStudent, async (req, res) => {
   try {
     const held = await findHeldScholarships(req.studentNumber);
     const exclusive = held.find(s => s.scholarshipId === EXCLUSIVE_SCHOLARSHIP_ID) ?? null;
-    res.json({ held, exclusive });
+    const slotsFull = [];
+    for (const scholarship of allScholarships().filter(s => s.slotsPerCollege)) {
+      if (held.some(h => h.scholarshipId === scholarship.id)) continue;
+      const full = await collegeSlotsFull(scholarship, req.studentNumber);
+      if (full) slotsFull.push({ scholarshipId: scholarship.id, message: full.message });
+    }
+    res.json({ held, exclusive, slotsFull });
   } catch (err) {
     console.error('Fetch holdings error:', err);
     res.status(500).json({ error: 'Failed to load your scholarships.' });

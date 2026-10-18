@@ -20,6 +20,18 @@ const specialEventSchema = new mongoose.Schema({
   hours: { type: Number, required: true, min: 0, max: 100 },
 }, { _id: true });
 
+// A scholar's claim to have attended a credited event (models/DutyEvent.js).
+// Only Approved claims count, for the event's credit hours.
+const CLAIM_STATUSES = ['Pending', 'Approved', 'Rejected'];
+const eventClaimSchema = new mongoose.Schema({
+  event: { type: mongoose.Schema.Types.ObjectId, ref: 'DutyEvent', required: true },
+  status: { type: String, enum: CLAIM_STATUSES, default: 'Pending' },
+  claimedAt: { type: Date, default: Date.now },
+  reviewedBy: String,
+  reviewedAt: Date,
+  note: { type: String, trim: true, maxlength: 500 },   // e.g. why it was rejected
+}, { _id: false });
+
 const dutyLogSchema = new mongoose.Schema({
   studentNumber: { type: String, required: true, index: true },
   academicYear: { type: Number, required: true },   // start year: 2026 = AY 2026–2027
@@ -30,10 +42,14 @@ const dutyLogSchema = new mongoose.Schema({
   deadline: { type: String },                        // YYYY-MM-DD
   requiredHours: { type: Number, min: 0, max: 1000 },
   entries: { type: [entrySchema], default: [] },
+  // Before credited events: hours the scholar typed in. No longer
+  // accepted from scholars; kept so old logs still add up.
   specialEvents: { type: [specialEventSchema], default: [] },
+  eventClaims: { type: [eventClaimSchema], default: [] },
 }, { timestamps: true });
 
 dutyLogSchema.index({ studentNumber: 1, academicYear: 1, term: 1 }, { unique: true });
 
 module.exports = mongoose.model('DutyLog', dutyLogSchema);
 module.exports.TERMS = TERMS;
+module.exports.CLAIM_STATUSES = CLAIM_STATUSES;
