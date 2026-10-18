@@ -97,6 +97,31 @@ const announcementSchema = new mongoose.Schema(
     imageMimetype: String,
 
     // --- Facebook Page cross-post (services/facebook.js) -------------------
+    // "Also email students" (utils/announcementEmails.js): sent once, to
+    // the students' Outlook, when the announcement is published.
+    emailEnabled: { type: Boolean, default: false },
+    // Older announcements: 'all' | 'applicants' | 'scholars' of the related
+    // scholarship. New ones use emailTarget (utils/emailTarget.js).
+    emailAudience: { type: String, enum: ['all', 'applicants', 'scholars'], default: 'all' },
+    emailTarget: {
+      type: new mongoose.Schema({
+        mode: { type: String, enum: ['all', 'applicants', 'scholars', 'students'], required: true },
+        scholarshipIds: { type: [String], default: [] },
+        statuses: { type: [String], default: [] },
+        colleges: { type: [String], default: [] },
+        yearLevels: { type: [String], default: [] },
+        studentNumbers: { type: [String], default: [] },
+      }, { _id: false }),
+      default: undefined,
+    },
+    emailStatus: { type: String, enum: ['not_sent', 'queued', 'sending', 'sent', 'failed'], default: 'not_sent' },
+    emailTotal: { type: Number, default: 0 },
+    emailSent: { type: Number, default: 0 },
+    emailError: { type: String, default: null },
+    emailQueuedAt: { type: Date, default: null },
+    emailSentAt: { type: Date, default: null },
+    emailLockedAt: { type: Date, default: null },
+
     // fbEnabled is the admin's choice ("Also post to Facebook"). The post
     // exists on the Page while the announcement is published and fbEnabled.
     fbEnabled: { type: Boolean, default: false },
@@ -178,7 +203,15 @@ announcementSchema.methods.toClientShape = function toClientShape() {
     fbPostId: this.fbPostId,
     fbPermalink: this.fbPermalink,
     fbError: this.fbError,
-    fbLastSyncedAt: this.fbLastSyncedAt
+    fbLastSyncedAt: this.fbLastSyncedAt,
+    emailEnabled: this.emailEnabled,
+    emailAudience: this.emailAudience,
+    emailTarget: require('../utils/emailTarget').targetOf(this),
+    emailStatus: this.emailStatus,
+    emailTotal: this.emailTotal,
+    emailSent: this.emailSent,
+    emailError: this.emailError,
+    emailSentAt: this.emailSentAt
   };
 };
 

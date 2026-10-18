@@ -61,14 +61,22 @@ const APPLICATION_DOCUMENT_FIELDS = [
 ];
 
 // --- Announcement images (up to MAX_ANNOUNCEMENT_IMAGES per announcement) ---
-// Same JPEG-only rule and memory buffering as application documents; the
-// route streams the files into GridFS and, when cross-posting, uploads the
-// same bytes to the Facebook Page. Must match Announcement.MAX_IMAGES.
+// JPG or PNG (both show on Facebook and inline in Outlook emails), held in
+// memory; the route checks each file's first bytes, stores it and, when
+// cross-posting, uploads the same bytes to the Facebook Page. Must match
+// Announcement.MAX_IMAGES.
 const MAX_ANNOUNCEMENT_IMAGES = 10;
+const ANNOUNCEMENT_IMAGE_TYPES = { 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'] };
 const announcementImageUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_SIZE, files: MAX_ANNOUNCEMENT_IMAGES },
-  fileFilter,
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!ANNOUNCEMENT_IMAGE_TYPES[file.mimetype]?.includes(ext)) {
+      return cb(new Error(`"${file.originalname}" must be a JPG or PNG image.`));
+    }
+    cb(null, true);
+  },
 }).array('images', MAX_ANNOUNCEMENT_IMAGES);
 
 module.exports = { profileUpload, applicationUpload, announcementImageUpload, MAX_ANNOUNCEMENT_IMAGES, APPLICATION_DOCUMENT_FIELDS };

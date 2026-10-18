@@ -18,6 +18,7 @@ const scholarshipRoutes = require('./routes/scholarships');
 const fseRoutes = require('./routes/fse');
 const renewalRoutes = require('./routes/renewals');
 const dutyHoursRoutes = require('./routes/dutyHours');
+const messageRoutes = require('./routes/messages');
 
 const app = express(); // ✅ Create the app first
 
@@ -74,6 +75,7 @@ app.use('/api/scholarships', scholarshipRoutes);
 app.use('/api/fse', fseRoutes);
 app.use('/api/renewals', renewalRoutes);
 app.use('/api/duty-hours', dutyHoursRoutes);
+app.use('/api/messages', messageRoutes);
 // Same router under /api/admin, e.g. POST /api/admin/announcements/:id/facebook/retry.
 app.use('/api/admin/announcements', announcementRoutes);
 
@@ -84,9 +86,11 @@ app.get('/', (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-mongoose.connect(process.env.MONGODB_URI)
+// MONGODB_DB (optional) picks another database on the same cluster, e.g.
+// aniskolar_demo filled by scripts/seed-demo.js.
+mongoose.connect(process.env.MONGODB_URI, process.env.MONGODB_DB ? { dbName: process.env.MONGODB_DB } : {})
   .then(async () => {
-    console.log('✅ MongoDB Atlas connected');
+    console.log(`✅ MongoDB Atlas connected (${mongoose.connection.db.databaseName})`);
     // Scholarships the AdSO created (kept in memory for findScholarship),
     // loaded before the first request.
     await require('./utils/customScholarships').load()
@@ -99,6 +103,10 @@ mongoose.connect(process.env.MONGODB_URI)
       .catch(err => console.error('Publishing scheduled announcements failed:', err));
     publishDue();
     setInterval(publishDue, 60_000);
+    // Announcement emails (Outlook) go out a few batches a minute.
+    const sendEmails = () => announcementRoutes.processEmailQueue()
+      .catch(err => console.error('Sending announcement emails failed:', err));
+    setInterval(sendEmails, 60_000);
   })
   .catch(err => {
     console.error('❌ MongoDB connection error:', err.message);

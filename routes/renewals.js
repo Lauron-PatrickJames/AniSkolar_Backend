@@ -236,6 +236,7 @@ function parsePeriodBody(body, { partial }) {
     const scholarship = findScholarship(body.scholarshipId);
     if (!scholarship) return { error: 'Choose a scholarship.' };
     if (!acceptsOnlineApplications(scholarship)) return { error: 'This scholarship is awarded outside AniSkolar, so it has no online renewal.' };
+    if (scholarship.noRenewal) return { error: `The ${scholarship.name} has no renewals: scholars keep it until they graduate.` };
     out.scholarshipId = scholarship.id;
   }
   if (!partial || body.academicYear !== undefined) {
