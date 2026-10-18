@@ -16,6 +16,7 @@ const { officeFilter, scopedOffice } = require('../utils/officeScope');
 const { academicYearStartExpr, inSfagApplicationWindow } = require('../utils/academicYear');
 const { nextReferenceCode } = require('../utils/referenceCode');
 const { otherScholarshipsHeld } = require('../utils/exclusivity');
+const { collegeSlotsFull } = require('../utils/collegeSlots');
 const {
   isGrantFormType,
   parseGrantSections,
@@ -180,6 +181,11 @@ router.post('/', requireStudent, (req, res) => {
       if (scholarshipId === SFAG_ID && !inSfagApplicationWindow()) {
         return res.status(400).json({ error: SFAG_WINDOW_MESSAGE });
       }
+
+      // Scholarships with slots per college (POLCA: 2): a full college
+      // can't apply until a current scholar graduates or stops.
+      const full = await collegeSlotsFull(scholarship, studentNumber);
+      if (full) return res.status(409).json({ code: 'college_slots_full', error: full.message });
 
       // Applying is never blocked by another scholarship: only one
       // internally funded scholarship can be held, and the student chooses
@@ -757,6 +763,7 @@ router.get('/', requireAdmin, async (req, res) => {
                 lastName: '$$s.lastName',
                 course: '$$s.course',
                 programCode: '$$s.programCode',
+                college: '$$s.college',
                 yearLevel: '$$s.yearLevel',
                 section: '$$s.section',
                 gpa: '$$s.gpa',
@@ -837,6 +844,19 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
       }
       if (['Approved', 'Rejected', 'Needs Revision'].includes(application.status)) {
         return res.status(400).json({ error: 'Add a message to the applicant explaining why the decision changed.' });
+      }
+    }
+
+    // Slots per college (POLCA: 2): no approving while the applicant's
+    // college is full.
+    if (status === 'Approved') {
+      const full = await collegeSlotsFull(findScholarship(application.scholarshipId), application.studentNumber);
+      if (full) {
+        return res.status(409).json({
+          code: 'college_slots_full',
+          holders: full.holders,
+          error: `${full.message} Current scholars: ${full.holders.map(h => h.name || h.studentNumber).join(', ')}. Mark one as graduated or stopped first if a slot has opened.`,
+        });
       }
     }
 
@@ -985,6 +1005,42 @@ router.patch('/:id/sfag-percentage', requireAdso, async (req, res) => {
   } catch (err) {
     console.error('Set SFAG percentage error:', err);
     res.status(500).json({ error: 'Failed to save the grant percentage.' });
+  }
+});
+
+// PATCH /api/applications/:id/end — the scholar's office (or the AdSO)
+// records that an approved scholar of a scholarship without renewals
+// (POLCA) graduated or stopped: { reason: 'Graduated' | 'Stopped' | null }.
+// That ends the scholarship and frees its slot; null undoes it.
+router.patch('/:id/end', requireAdmin, async (req, res) => {
+  try {
+    let objectId;
+    try {
+      objectId = new ObjectId(req.params.id);
+    } catch {
+      return res.status(400).json({ error: 'Invalid application id.' });
+    }
+    const application = await Application.findOne({ _id: objectId, ...officeFilter(req.adminUser) });
+    if (!application) return res.status(404).json({ error: 'Application not found.' });
+    if (!findScholarship(application.scholarshipId)?.noRenewal) return res.status(400).json({ error: 'This scholarship ends through its renewals.' });
+    if (application.status !== 'Approved') return res.status(409).json({ error: 'Only an approved scholar can be marked as graduated or stopped.' });
+    const { reason } = req.body || {};
+    if (reason === null) {
+      application.endedAt = undefined;
+      application.endReason = undefined;
+      application.endedBy = undefined;
+    } else if (reason === 'Graduated' || reason === 'Stopped') {
+      application.endedAt = new Date();
+      application.endReason = reason;
+      application.endedBy = req.adminUser.email || req.adminUser.id;
+    } else {
+      return res.status(400).json({ error: 'Choose Graduated or Stopped.' });
+    }
+    await application.save();
+    res.json({ application });
+  } catch (err) {
+    console.error('End scholarship error:', err);
+    res.status(500).json({ error: 'Failed to save.' });
   }
 });
 

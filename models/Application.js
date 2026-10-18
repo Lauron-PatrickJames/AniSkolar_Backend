@@ -111,6 +111,13 @@ const applicationSchema = new mongoose.Schema({
   sfagPercentageSetBy: String,
   sfagPercentageSetAt: Date,
 
+  // Scholarships without renewals (noRenewal in data/scholarships.js, e.g.
+  // POLCA): the office records when an approved scholar graduated or
+  // stopped, which ends the scholarship and frees its slot.
+  endedAt: Date,
+  endReason: { type: String, enum: ['Graduated', 'Stopped'] },
+  endedBy: String,
+
   // Set when a POLCA / Alumni office approves the application, which sends
   // it to the AdSO ('LSO') automatically (PATCH /api/applications/:id/status).
   // Until then the AdSO can't see it; see utils/officeScope.js. Always unset

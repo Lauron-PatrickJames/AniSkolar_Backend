@@ -19,6 +19,27 @@ function entryHours({ timeIn, timeOut }) {
 
 const round2 = n => Math.round(n * 100) / 100;
 
+// When duty may be rendered (AdSO, Oct 2026): Monday–Thursday 8:00 AM–6:00
+// PM, Friday 8:00 AM–5:00 PM, never across the 12:00–1:00 PM lunch break,
+// and at least 1.5 hours at a time. Returns the reason an entry breaks
+// these, or null. Mirrors dutyRuleError in the frontend.
+const DUTY_START = 8 * 60;
+const LUNCH_START = 12 * 60;
+const LUNCH_END = 13 * 60;
+const MIN_DUTY_MINUTES = 90;
+function dutyRuleError({ date, timeIn, timeOut }) {
+  const day = new Date(`${date}T00:00:00Z`).getUTCDay();
+  if (day === 0 || day === 6) return 'Duty is only on weekdays (Monday to Friday).';
+  const start = minutes(timeIn);
+  const end = minutes(timeOut);
+  if (start < DUTY_START) return 'Duty starts at 8:00 AM at the earliest.';
+  if (day === 5 && end > 17 * 60) return 'Duty ends by 5:00 PM on Fridays.';
+  if (end > 18 * 60) return 'Duty ends by 6:00 PM, Monday to Thursday.';
+  if (start < LUNCH_END && end > LUNCH_START) return 'Duty can\'t include the 12:00–1:00 PM lunch break. Log the morning and the afternoon as separate duties.';
+  if (end - start < MIN_DUTY_MINUTES) return 'A duty must be at least 1.5 hours.';
+  return null;
+}
+
 // Days between two YYYY-MM-DD dates (b - a).
 function daysBetween(a, b) {
   return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000);
@@ -53,7 +74,7 @@ function summarize(log, today) {
 }
 
 // Validates a scholar's whole log. Returns { log } or { error }. The
-// office isn't part of it — the AdSO assigns that.
+// office and event credit aren't part of it — the AdSO handles those.
 function parseLog(body) {
   const out = {};
 
@@ -75,19 +96,13 @@ function parseLog(body) {
     if (!e || !isValidDate(e.date)) return { error: 'Every duty needs a valid date.' };
     if (!TIME_RE.test(e.timeIn || '') || !TIME_RE.test(e.timeOut || '')) return { error: `Enter the time in and time out for ${e.date}.` };
     if (minutes(e.timeOut) <= minutes(e.timeIn)) return { error: `Time out must be after time in (${e.date}).` };
+    const ruleError = dutyRuleError(e);
+    if (ruleError) return { error: `${ruleError} (${e.date}, ${e.timeIn}–${e.timeOut})` };
     out.entries.push({ date: e.date, timeIn: e.timeIn, timeOut: e.timeOut });
   }
 
-  const events = Array.isArray(body.specialEvents) ? body.specialEvents : [];
-  if (events.length > 100) return { error: 'A term can have at most 100 special events.' };
-  out.specialEvents = [];
-  for (const e of events) {
-    const name = typeof e?.name === 'string' ? e.name.trim() : '';
-    const hours = Number(e?.hours);
-    if (!name) return { error: 'Every special event needs a name.' };
-    if (!Number.isFinite(hours) || hours <= 0 || hours > 100) return { error: `Enter the equivalent hours for ${name}.` };
-    out.specialEvents.push({ name: name.slice(0, 200), hours: round2(hours) });
-  }
+  // Event credit comes from the AdSO's credited events (claims approved by
+  // the AdSO), so special events sent by the scholar are ignored.
   return { log: out };
 }
 
@@ -105,4 +120,4 @@ function todayInManila(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(date);
 }
 
-module.exports = { entryHours, summarize, parseLog, currentTerm, todayInManila, isValidDate };
+module.exports = { entryHours, dutyRuleError, summarize, parseLog, currentTerm, todayInManila, isValidDate };

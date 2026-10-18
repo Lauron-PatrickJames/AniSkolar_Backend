@@ -21,6 +21,13 @@
 // referenceCode: the short code that starts each new application's
 // reference number (utils/referenceCode.js), e.g. 'ENT' → ENT-2026-0001.
 //
+// noRenewal: no renewals — an approved scholar keeps it until they graduate
+// or stop, which their office records on the application (PATCH
+// /api/applications/:id/end). No renewal periods can be opened for it.
+//
+// slotsPerCollege: at most this many current scholars per college; a full
+// college can't apply or be approved (utils/collegeSlots.js).
+//
 // For the grant-form scholarships (applicationFormType 'polca' / 'alumni'):
 //   - eligibility: the rules checked at apply time (utils/grantForms.js).
 //     Retention rules (GPA, no failing grades, unit load, good moral) are
@@ -46,6 +53,10 @@ const SCHOLARSHIPS = [
     office: 'POLCA',
     formType: 'polca',
     referenceCode: 'PSEF',
+    // POLCA takes 2 scholars per college and keeps them until they
+    // graduate; no renewals (Oct 2026 — to confirm with POLCA).
+    noRenewal: true,
+    slotsPerCollege: 2,
     eligibility: {
       minHsGeneralAverage: 85,
       // "No grade in the 70s" — every HS subject grade must be at least 80.

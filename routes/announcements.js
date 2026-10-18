@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const { ObjectId } = require('mongodb');
 const Announcement = require('../models/Announcement');
+const Student = require('../models/Student');
 const { requireAdso } = require('../middleware/requireAdmin');
 const { announcementImageUpload } = require('../middleware/uploadConfig');
 const { putFile, openFile, readFile, deleteFile } = require('../utils/gridfs');
@@ -94,10 +95,20 @@ function storeImage(file) {
   return putFile({ buffer: file.buffer, filename: file.originalname, mimetype: file.mimetype, metadata: { kind: 'announcement-image' } });
 }
 
+// The file really is a JPG or PNG (checks its first bytes).
+const IMAGE_SIGNATURES = { 'image/jpeg': [0xff, 0xd8, 0xff], 'image/png': [0x89, 0x50, 0x4e, 0x47] };
+const isRealImage = file => IMAGE_SIGNATURES[file.mimetype]?.every((b, i) => file.buffer[i] === b);
+
 // Stores uploaded images (utils/gridfs.js: Azure or GridFS), pushing each
 // entry onto `stored` as it lands so the caller can clean up if a later
-// one fails.
+// one fails. Throws a 400-worthy error for a file that isn't a real image.
 async function storeImages(files, stored) {
+  const bad = (files || []).find(f => !isRealImage(f));
+  if (bad) {
+    const err = new Error(`"${bad.originalname}" isn't a real JPG or PNG image.`);
+    err.status = 400;
+    throw err;
+  }
   for (const file of files || []) {
     const fileId = await storeImage(file);
     stored.push({ fileId, filename: file.originalname, mimetype: file.mimetype });
@@ -207,8 +218,39 @@ async function syncFacebook(doc) {
 
 // Saves, syncs Facebook, saves the Facebook outcome. Returns the sync
 // result for the response.
+// Announcement emails go out in the background (utils/announcementEmails.js).
+const { updateEmailQueue, processEmailQueue } = require('../utils/announcementEmails');
+const kickEmails = () => processEmailQueue().catch(err => console.error('Sending announcement emails failed:', err));
+
+// "Also email students": who to. 'applicants' / 'scholars' need the related
+// scholarship. Returns { value } or { error }; undefined when not sent.
+function parseEmailAudience(raw, scholarshipId) {
+  if (raw === undefined) return { value: undefined };
+  if (!['all', 'applicants', 'scholars'].includes(raw)) return { error: 'Choose who gets the email.' };
+  if (raw !== 'all' && !scholarshipId) return { error: 'Choose the related scholarship to email its applicants or scholars.' };
+  return { value: raw };
+}
+
+const { parseEmailTarget, previewTarget } = require('../utils/emailTarget');
+
+// The email audience from a request: emailTarget (the editor), or the older
+// emailAudience (the scholarship status dialog). Returns { target } (null
+// when neither was sent) or { error }.
+function emailTargetFrom(body, scholarshipId) {
+  if (body.emailTarget !== undefined) {
+    const t = parseEmailTarget(body.emailTarget);
+    return t.error ? { error: t.error } : { target: t.value };
+  }
+  const a = parseEmailAudience(body.emailAudience, scholarshipId);
+  if (a.error) return { error: a.error };
+  if (!a.value) return { target: null };
+  return { target: { mode: a.value, scholarshipIds: a.value === 'all' ? [] : [scholarshipId], statuses: [], colleges: [], yearLevels: [], studentNumbers: [] } };
+}
+
 async function saveAndSync(doc) {
+  updateEmailQueue(doc);
   await doc.save();
+  if (doc.emailStatus === 'queued') kickEmails();
   const id = String(doc._id);
   if (syncing.has(id)) {
     // Another request is mid-sync for this announcement. Mark this change
@@ -324,7 +366,7 @@ router.get('/:id/images/:fileId', (req, res) => sendImage(req, res, req.params.f
 router.get('/:id/image', (req, res) => sendImage(req, res, null));
 
 // POST /api/announcements
-// JSON or multipart (with optional "images" JPGs, up to MAX_IMAGES). Fields: title,
+// JSON or multipart (with optional "images", JPG or PNG, up to MAX_IMAGES). Fields: title,
 // description, content, category, scholarshipId (related scholarship, optional),
 // isPinned, status ('draft' | 'scheduled' | 'published'), scheduledFor (ISO
 // date-time, for 'scheduled'), fbEnabled ("Also post to Facebook").
@@ -359,8 +401,15 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
       scheduledFor: schedule.value,
       createdBy: req.adminUser.email || req.adminUser.id,
       fbEnabled: parseBool(req.body.fbEnabled) ?? false,
+      emailEnabled: parseBool(req.body.emailEnabled) ?? false,
       images: newImages,
     });
+    const audience = emailTargetFrom(req.body, doc.scholarshipId);
+    if (audience.error) {
+      await discardUnsaved(newImages);
+      return res.status(400).json({ error: audience.error });
+    }
+    if (audience.target) doc.emailTarget = audience.target;
 
     const validationError = await doc.validate().then(() => null, err => err);
     if (validationError) {
@@ -371,8 +420,9 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
     const facebookResult = await saveAndSync(doc);
     sendSaved(res, 201, doc, facebookResult);
   } catch (err) {
-    console.error('Create announcement error:', err);
     await discardUnsaved(newImages);
+    if (err.status === 400) return res.status(400).json({ error: err.message });
+    console.error('Create announcement error:', err);
     res.status(500).json({ error: 'Failed to create announcement.' });
   }
 });
@@ -408,6 +458,15 @@ router.patch('/:id', requireAdso, withImageUpload, async (req, res) => {
     if (isPinned !== undefined) existing.isPinned = isPinned;
     const fbEnabled = parseBool(req.body.fbEnabled);
     if (fbEnabled !== undefined) existing.fbEnabled = fbEnabled;
+    // The email goes out once; its settings can't change after it started.
+    const emailEnabled = parseBool(req.body.emailEnabled);
+    const started = ['sending', 'sent'].includes(existing.emailStatus) || existing.emailSent > 0;
+    if (emailEnabled !== undefined && !started) existing.emailEnabled = emailEnabled;
+    if (!started) {
+      const audience = emailTargetFrom(req.body, existing.scholarshipId);
+      if (audience.error) return res.status(400).json({ error: audience.error });
+      if (audience.target) existing.emailTarget = audience.target;
+    }
 
     if (status !== undefined && !Announcement.STATUSES.includes(status)) {
       return res.status(400).json({ error: 'Status must be draft, scheduled or published.' });
@@ -459,8 +518,9 @@ router.patch('/:id', requireAdso, withImageUpload, async (req, res) => {
     }
     sendSaved(res, 200, existing, facebookResult);
   } catch (err) {
-    console.error('Update announcement error:', err);
     await discardUnsaved(newImages);
+    if (err.status === 400) return res.status(400).json({ error: err.message });
+    console.error('Update announcement error:', err);
     res.status(500).json({ error: 'Failed to update announcement.' });
   }
 });
@@ -482,6 +542,55 @@ router.post('/:id/facebook/retry', requireAdso, async (req, res) => {
   } catch (err) {
     console.error('Retry Facebook post error:', err);
     res.status(500).json({ error: 'Failed to retry the Facebook post.' });
+  }
+});
+
+// POST /api/announcements/email/preview  { emailTarget } → { count, sample, unknown }
+// How many students an email audience reaches, for the editor.
+router.post('/email/preview', requireAdso, async (req, res) => {
+  try {
+    const t = parseEmailTarget(req.body?.emailTarget);
+    if (t.error) return res.status(400).json({ error: t.error });
+    res.json(await previewTarget(t.value));
+  } catch (err) {
+    console.error('Email preview error:', err);
+    res.status(500).json({ error: 'Failed to count the recipients.' });
+  }
+});
+
+// GET /api/announcements/email/students?q= — up to 10 students matching a
+// name or student number, to add to an email audience.
+router.get('/email/students', requireAdso, async (req, res) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (q.length < 2) return res.json({ students: [] });
+    const safe = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const students = await Student.find({ $or: [{ studentNumber: { $regex: `^${safe}` } }, { name: { $regex: safe, $options: 'i' } }] })
+      .select('studentNumber name programCode college yearLevel').limit(10).lean();
+    res.json({ students: students.map(({ _id, ...s }) => s) });
+  } catch (err) {
+    console.error('Student search error:', err);
+    res.status(500).json({ error: 'Failed to search students.' });
+  }
+});
+
+// POST /api/announcements/:id/email/retry — sends a failed announcement
+// email again, from where it stopped.
+router.post('/:id/email/retry', requireAdso, async (req, res) => {
+  try {
+    const objectId = toObjectId(req.params.id);
+    if (!objectId) return res.status(400).json({ error: 'Invalid announcement id.' });
+    const doc = await Announcement.findOneAndUpdate(
+      { _id: objectId, emailStatus: 'failed' },
+      { $set: { emailStatus: 'queued', emailError: null, emailQueuedAt: new Date() } },
+      { returnDocument: 'after' }
+    );
+    if (!doc) return res.status(400).json({ error: 'There is no failed email to retry for this announcement.' });
+    kickEmails();
+    res.json({ announcement: doc.toClientShape() });
+  } catch (err) {
+    console.error('Retry announcement email error:', err);
+    res.status(500).json({ error: 'Failed to retry the email.' });
   }
 });
 
@@ -517,3 +626,4 @@ router.delete('/:id', requireAdso, async (req, res) => {
 
 module.exports = router;
 module.exports.publishDueAnnouncements = publishDueAnnouncements;
+module.exports.processEmailQueue = processEmailQueue;
