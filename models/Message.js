@@ -1,7 +1,8 @@
 const mongoose = require('mongoose');
 
-// Messages between a student and the AdSO: one conversation per student
-// (all of their messages, by studentNumber). Either side may attach JPG,
+// Messages with the AdSO: one conversation per student (by studentNumber)
+// and one per duty office (by office; its head writes from the office
+// portal). Either side may attach JPG,
 // PNG or PDF files (stored like application documents, utils/gridfs.js)
 // and mention one of the student's applications. readAt is when the
 // recipient opened the conversation. See routes/messages.js.
@@ -14,8 +15,10 @@ const attachmentSchema = new mongoose.Schema({
 }, { _id: false });
 
 const messageSchema = new mongoose.Schema({
-  studentNumber: { type: String, required: true, index: true },
-  from: { type: String, enum: ['student', 'adso'], required: true },
+  // Exactly one of studentNumber / office.
+  studentNumber: { type: String, index: true },
+  office: { type: String, trim: true, maxlength: 200, index: true },
+  from: { type: String, enum: ['student', 'adso', 'office'], required: true },
   authorEmail: String,
   authorName: String,
   body: { type: String, trim: true, maxlength: 4000, default: '' },

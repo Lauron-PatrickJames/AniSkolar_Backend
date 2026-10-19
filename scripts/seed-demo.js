@@ -42,6 +42,7 @@ const DutyLog = require('../models/DutyLog');
 const DutySetting = require('../models/DutySetting');
 const DutyEvent = require('../models/DutyEvent');
 const Message = require('../models/Message');
+const OfficeRequest = require('../models/OfficeRequest');
 const { findScholarship } = require('../data/scholarships');
 const { findProgram } = require('../data/programs');
 const { nextReferenceCode } = require('../utils/referenceCode');
@@ -311,10 +312,11 @@ function history(steps, office = 'LSO') {
   await app(S[3], 's3', 'Approved', { created: '2024-06-12T09:00:00+08:00', decided: '2024-07-01T09:00:00+08:00' });
   await app(S[5], 's3', 'Approved', { created: '2023-06-13T09:00:00+08:00', decided: '2023-07-01T09:00:00+08:00', ended: '2026-06-30T09:00:00+08:00' });
   await app(S[11], 's3', 'Approved', { created: '2025-06-14T09:00:00+08:00', decided: '2025-07-01T09:00:00+08:00' });
-  // Last year's Alumni scholars, up for renewal.
+  // Earlier Alumni scholars (2 campus-wide, no renewals). With S[7] (above)
+  // and S[12] the 2 slots are full; S[4] and S[1] have graduated.
   await app(S[12], 's4', 'Approved', { created: '2025-06-10T09:00:00+08:00', decided: '2025-06-30T09:00:00+08:00' });
-  await app(S[4], 's4', 'Approved', { created: '2025-06-11T09:00:00+08:00', decided: '2025-06-30T09:00:00+08:00' });
-  await app(S[1], 's4', 'Approved', { created: '2025-06-12T09:00:00+08:00', decided: '2025-06-30T09:00:00+08:00' });
+  await app(S[4], 's4', 'Approved', { created: '2022-06-11T09:00:00+08:00', decided: '2022-06-30T09:00:00+08:00', ended: '2026-06-30T09:00:00+08:00' });
+  await app(S[1], 's4', 'Approved', { created: '2022-06-12T09:00:00+08:00', decided: '2022-06-30T09:00:00+08:00', ended: '2026-06-30T09:00:00+08:00' });
 
   // Real students: an approved SFAG so the student side has duty hours.
   for (const [i, r] of realStudents.entries()) {
@@ -357,18 +359,21 @@ function history(steps, office = 'LSO') {
     await renewal(S[9], 'Not Renewed', { gpa: 2.3, avg: 3, note: 'GPA below 2.50 this semester.' }),
     await renewal(S[13], 'Not Continuing', { continuing: false }),
   ]);
-  const alumniPeriod = await RenewalPeriod.create({ scholarshipId: 's4', academicYear: 2026, term: '1st Semester', open: true, deadline: 'October 31, 2026', minGpa: 2.5, requiresEvaluation: false, requirements: ['Certificate of grades (previous semester)', 'Certificate of registration'], createdBy: ADMIN });
-  await Renewal.insertMany([
-    await renewal(S[12], 'Under Evaluation', { gpa: 3.3 }, alumniPeriod),
-    await renewal(S[4], 'Not Renewed', { gpa: 2.2, note: 'GPA below 2.50 this semester.' }, alumniPeriod),
-    await renewal(S[1], 'Renewed', { gpa: 3.2 }, alumniPeriod),
-  ]);
+  // POLCA and Alumni have no renewals.
 
   // Duty hours: settings (hours from the AdSO + office slots), events, logs.
+  // Offices and their heads (sample heads use .invalid emails, so nobody can
+  // sign in as them; to try the office portal, put your own school email as
+  // a head in Duty hours → Offices).
+  const HEADS = {
+    'Office of the University Registrar': ['Dr. Sample Registrar', 'demo.registrar.head@aniskolar-demo.invalid'],
+    'Accounting Office': ['Ms. Sample Accounting', 'demo.accounting.head@aniskolar-demo.invalid'],
+    "CICS Dean's Office": ['Dr. Sample Dean', 'demo.cics.head@aniskolar-demo.invalid'],
+  };
   await DutySetting.create({ _id: 'duty', officeSlots: [
     { office: 'Office of the University Registrar', slots: 5 }, { office: 'Accounting Office', slots: 4 }, { office: 'Admissions and Scholarship Office', slots: 5 },
     { office: 'Aklatang Emilio Aguinaldo (Library)', slots: 2 }, { office: 'University Clinic', slots: 1 }, { office: "CICS Dean's Office", slots: 2 },
-  ], updatedBy: ADMIN });
+  ].map(o => (HEADS[o.office] ? { ...o, headName: HEADS[o.office][0], headEmail: HEADS[o.office][1] } : o)), updatedBy: ADMIN });
   const [assembly, recollection, outreach] = await DutyEvent.insertMany([
     { name: "Scholars' General Assembly", date: '2026-08-28', organizer: 'COSA', creditHours: 3, academicYear: 2026, term: '1st Semester', createdBy: ADMIN },
     { name: 'Lasallian Recollection for Scholars', date: '2026-09-25', organizer: 'Scholarship office', creditHours: 4, academicYear: 2026, term: '1st Semester', createdBy: ADMIN },
@@ -395,14 +400,21 @@ function history(steps, office = 'LSO') {
     return out;
   }
   const claim = (event, status, note) => ({ event: event._id, status, claimedAt: d(`${event.date}T18:00:00+08:00`), ...(status !== 'Pending' ? { reviewedBy: ADMIN, reviewedAt: d('2026-10-01'), ...(note ? { note } : {}) } : {}) });
-  const logOf = (s, office, count, claims = []) => ({
+  // Offices with a head confirm duties: before Oct 5 confirmed, the latest
+  // waiting, and the first in October flagged for one scholar.
+  const reviewed = (office, entries, flagOne) => entries.map((e, i) => {
+    if (!HEADS[office]) return e;
+    if (flagOne && e.date >= '2026-10-01' && !entries.slice(0, i).some(x => x.date >= '2026-10-01')) return { ...e, status: 'flagged', note: 'Not in the office that afternoon.', reviewedBy: HEADS[office][1], reviewedAt: d('2026-10-06') };
+    return e.date < '2026-10-05' ? { ...e, status: 'confirmed', reviewedBy: HEADS[office][1], reviewedAt: d(`${e.date}T18:00:00+08:00`) } : e;
+  });
+  const logOf = (s, office, count, claims = [], flagOne = false) => ({
     studentNumber: s.studentNumber, academicYear: 2026, term: '1st Semester',
     ...(office ? { officeAssigned: office, officeAssignedBy: ADMIN, officeAssignedAt: d('2026-08-10') } : {}),
-    deadline: '2026-12-11', entries: duties(count, count), specialEvents: [], eventClaims: claims,
+    deadline: '2026-12-11', entries: reviewed(office, duties(count, count), flagOne), specialEvents: [], eventClaims: claims,
   });
   await DutyLog.insertMany([
     logOf(S[0], 'Office of the University Registrar', 40, [claim(assembly, 'Approved'), claim(recollection, 'Approved')]),
-    logOf(S[1], 'Office of the University Registrar', 22, [claim(assembly, 'Approved'), claim(recollection, 'Pending')]),
+    logOf(S[1], 'Office of the University Registrar', 22, [claim(assembly, 'Approved'), claim(recollection, 'Pending')], true),
     logOf(S[2], 'Accounting Office', 14, [claim(assembly, 'Rejected', 'Not on the attendance sheet.')]),
     logOf(S[3], "CICS Dean's Office", 3, [claim(recollection, 'Pending')]),
     logOf(S[4], 'Aklatang Emilio Aguinaldo (Library)', 0),
@@ -410,6 +422,12 @@ function history(steps, office = 'LSO') {
     logOf(S[10], null, 6, [claim(recollection, 'Pending')]),
     ...realStudents.map((r, i) => logOf(r, i === 0 ? 'Admissions and Scholarship Office' : null, 10 + i * 4, i === 0 ? [claim(assembly, 'Approved'), claim(recollection, 'Pending')] : [])),
     // S[7] has no log yet: no office, nothing logged (for Random assign).
+    // Last term (2nd sem 2025–26): where this term's renewing scholars did
+    // duty — that office's head evaluates them (Renewals shows it).
+    { studentNumber: S[6].studentNumber, academicYear: 2025, term: '2nd Semester', officeAssigned: 'Office of the University Registrar', officeAssignedBy: ADMIN, entries: [], specialEvents: [] },
+    { studentNumber: S[10].studentNumber, academicYear: 2025, term: '2nd Semester', officeAssigned: 'Accounting Office', officeAssignedBy: ADMIN, entries: [], specialEvents: [] },
+    { studentNumber: S[11].studentNumber, academicYear: 2025, term: '2nd Semester', officeAssigned: 'Office of the University Registrar', officeAssignedBy: ADMIN, entries: [], specialEvents: [] },
+    { studentNumber: S[9].studentNumber, academicYear: 2025, term: '2nd Semester', officeAssigned: "CICS Dean's Office", officeAssignedBy: ADMIN, entries: [], specialEvents: [] },
   ]);
 
   // Announcements
@@ -433,6 +451,13 @@ function history(steps, office = 'LSO') {
   const sfagOf = sn => apps.find(a => a.studentNumber === sn && a.scholarshipId === 's1');
   const pdfFor = async (s, label) => (await docs([label], `${s.firstName} ${s.lastName}`))[0];
   const indigency = await pdfFor(S[2], 'Certificate of indigency (new copy)');
+  await OfficeRequest.create({
+    office: 'Office of the University Registrar', headName: HEADS['Office of the University Registrar'][0], headEmail: HEADS['Office of the University Registrar'][1],
+    kind: 'more', count: 2, note: 'Enrollment season — we need two more scholars from November.', academicYear: 2026, term: '1st Semester', createdAt: d('2026-10-14T10:00:00+08:00'),
+  });
+  await db.collection('messages').insertMany([
+    { office: 'Accounting Office', from: 'office', authorName: `${HEADS['Accounting Office'][0]} (Accounting Office)`, authorEmail: HEADS['Accounting Office'][1], body: 'Good day! One of your scholars has been absent twice this week. Could you check with her?', attachments: [], readAt: null, createdAt: d('2026-10-16T14:20:00+08:00'), updatedAt: d('2026-10-16T14:20:00+08:00') },
+  ]);
   await db.collection('messages').insertMany([
     msg(S[0], 'student', '2026-08-03T10:15:00+08:00', 'Good morning po! When is the orientation for new SFAG grantees?', { more: { applicationRef: sfagOf(S[0].studentNumber)?.referenceCode } }),
     msg(S[0], 'adso', '2026-08-03T13:40:00+08:00', 'Good afternoon! The orientation is on August 14, 1:00–4:00 PM at the Aklatang Emilio Aguinaldo AVR. Please bring your COR.'),

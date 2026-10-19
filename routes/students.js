@@ -6,7 +6,7 @@ const { findProgram, YEAR_LEVELS } = require('../data/programs');
 const { requireAdso } = require('../middleware/requireAdmin');
 const { requireStudent } = require('../middleware/requireStudent');
 const { EXCLUSIVE_SCHOLARSHIP_ID, findHeldScholarships } = require('../utils/exclusivity');
-const { collegeSlotsFull } = require('../utils/collegeSlots');
+const { slotsFull: scholarSlotsFull } = require('../utils/collegeSlots');
 const { allScholarships } = require('../data/scholarships');
 
 const ALLOWED_EMAIL_DOMAIN = '@dlsud.edu.ph';
@@ -244,9 +244,9 @@ router.get('/me/holdings', requireStudent, async (req, res) => {
     const held = await findHeldScholarships(req.studentNumber);
     const exclusive = held.find(s => s.scholarshipId === EXCLUSIVE_SCHOLARSHIP_ID) ?? null;
     const slotsFull = [];
-    for (const scholarship of allScholarships().filter(s => s.slotsPerCollege)) {
+    for (const scholarship of allScholarships().filter(s => s.slotsPerCollege || s.totalSlots)) {
       if (held.some(h => h.scholarshipId === scholarship.id)) continue;
-      const full = await collegeSlotsFull(scholarship, req.studentNumber);
+      const full = await scholarSlotsFull(scholarship, req.studentNumber);
       if (full) slotsFull.push({ scholarshipId: scholarship.id, message: full.message });
     }
     res.json({ held, exclusive, slotsFull });
