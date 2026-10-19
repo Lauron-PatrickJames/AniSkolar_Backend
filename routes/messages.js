@@ -1,3 +1,4 @@
+const { findExplicitWords } = require('../utils/profanity');
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
@@ -83,6 +84,9 @@ async function createMessage(req, { studentNumber, office, from, authorEmail, au
   const files = req.files || [];
   if (!body && !files.length) return { status: 400, error: 'Write a message or attach a file.' };
   if (body.length > MAX_BODY) return { status: 400, error: `Messages can be at most ${MAX_BODY} characters.` };
+  // No explicit words, from anyone (utils/profanity.js).
+  const explicit = findExplicitWords(body);
+  if (explicit.length) return { status: 400, error: `Please remove inappropriate language before sending (${explicit.join(', ')}). If you're reporting something someone said, describe it without the word.`, code: 'explicit_words' };
   if (files.some(f => !looksLike(f))) return { status: 400, error: "One of the files isn't a real JPG, PNG or PDF." };
 
   let application = null;
