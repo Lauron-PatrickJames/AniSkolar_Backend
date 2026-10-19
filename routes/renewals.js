@@ -16,6 +16,7 @@ const { renderEmail } = require('../utils/emailTemplate');
 const Renewal = require('../models/Renewal');
 const RenewalPeriod = require('../models/RenewalPeriod');
 const Student = require('../models/Student');
+const { checksForPeriod } = require('../utils/renewalCheck');
 
 // Scholarship renewals.
 //
@@ -32,6 +33,7 @@ const Student = require('../models/Student');
 //   GET   /api/renewals/admin/periods/:id/scholars     every holder with their renewal (or none yet)
 //   PATCH /api/renewals/admin/:id/evaluation           enter the department head's evaluation
 //   PATCH /api/renewals/admin/:id/status               decide: Renewed / Not Renewed / Needs Revision
+//   POST  /api/renewals/admin/periods/:id/renew-eligible  { renewalIds } renew those that pass every check
 //
 // Renewals are reviewed by the office that owns the scholarship; the AdSO
 // sees and can decide every renewal. Documents are served by the existing
@@ -419,7 +421,7 @@ router.get('/admin/periods/:id/scholars', requireAdmin, async (req, res) => {
     const students = await Student.find({ studentNumber: { $in: studentNumbers } })
       .select('studentNumber name email course programCode yearLevel avatarUrl').lean();
     const studentByNumber = new Map(students.map(s => [s.studentNumber, s]));
-    const duty = await dutyOfficesFor(period, studentNumbers);
+    const [duty, checks] = await Promise.all([dutyOfficesFor(period, studentNumbers), checksForPeriod(period, renewals)]);
 
     const scholars = studentNumbers.map(studentNumber => {
       const student = studentByNumber.get(studentNumber);
@@ -433,6 +435,8 @@ router.get('/admin/periods/:id/scholars', requireAdmin, async (req, res) => {
         avatarUrl: student?.avatarUrl,
         holder: holder ? { referenceCode: holder.referenceCode, renewedFrom: holder.renewedFrom } : null,
         renewal: renewalByStudent.get(studentNumber) ?? null,
+        // Pre-check of a submitted renewal (utils/renewalCheck.js).
+        check: renewalByStudent.has(studentNumber) ? checks.get(String(renewalByStudent.get(studentNumber)._id)) ?? null : null,
         // Where they did duty in the term being evaluated (Duty hours).
         dutyOffice: duty.offices.get(studentNumber) ?? null,
       };
@@ -442,6 +446,39 @@ router.get('/admin/periods/:id/scholars', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('Load renewal scholars error:', err);
     res.status(500).json({ error: 'Failed to load scholars for this renewal.' });
+  }
+});
+
+// Renews, in one go, the chosen renewals that are Under Evaluation and pass
+// every check (re-checked here, not trusted from the page). Returns how many
+// were renewed and which were skipped.
+router.post('/admin/periods/:id/renew-eligible', requireAdmin, async (req, res) => {
+  try {
+    if (!isObjectId(req.params.id)) return res.status(400).json({ error: 'Invalid period id.' });
+    const period = await RenewalPeriod.findById(req.params.id).lean();
+    if (!period || !canSeeScholarship(req.adminUser, period.scholarshipId)) return res.status(404).json({ error: 'Renewal period not found.' });
+    const ids = Array.isArray(req.body?.renewalIds) ? [...new Set(req.body.renewalIds.filter(isObjectId))] : [];
+    if (!ids.length) return res.status(400).json({ error: 'Choose the renewals to renew.' });
+    if (ids.length > 1000) return res.status(400).json({ error: 'At most 1,000 at a time.' });
+    const renewals = await Renewal.find({ _id: { $in: ids }, periodId: period._id });
+    const checks = await checksForPeriod(period, renewals);
+    const now = new Date();
+    let renewed = 0;
+    const skipped = [];
+    for (const renewal of renewals) {
+      if (renewal.status !== 'Under Evaluation' || checks.get(String(renewal._id))?.result !== 'eligible') { skipped.push(renewal.studentNumber); continue; }
+      // Only if nobody decided it in the meantime.
+      const done = await Renewal.updateOne({ _id: renewal._id, status: 'Under Evaluation' }, {
+        $set: { status: 'Renewed', reviewedBy: req.adminUser.email, reviewedAt: now },
+        $unset: { reviewNote: '' },
+        $push: { history: { status: 'Renewed', note: 'Passed every renewal check (renewed in bulk).', changedBy: req.adminUser.email, changedByName: req.adminUser.name, changedByOffice: req.adminUser.office, changedAt: now } },
+      });
+      if (done.modifiedCount) renewed++; else skipped.push(renewal.studentNumber);
+    }
+    res.json({ renewed, skipped: skipped.length + (ids.length - renewals.length) });
+  } catch (err) {
+    console.error('Bulk renew error:', err);
+    res.status(500).json({ error: 'Failed to renew.' });
   }
 });
 

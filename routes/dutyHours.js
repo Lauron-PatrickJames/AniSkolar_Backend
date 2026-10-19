@@ -608,3 +608,5 @@ router.get('/admin/:id', requireAdso, async (req, res) => {
 });
 
 module.exports = router;
+// For the automation jobs (utils/automation.js) and renewal checks.
+module.exports.dutyHelpers = { dutyRules, logView, termEvents, everSfag, DUTY_SCHOLARSHIP_ID };

@@ -338,7 +338,7 @@ function history(steps, office = 'LSO') {
     const office = findScholarship(p.scholarshipId).office;
     const by = REVIEWERS[office];
     const evaluated = p.requiresEvaluation && extra.continuing !== false;
-    const documents = extra.continuing === false ? [] : await docs(['Certificate of grades', 'Certificate of registration'], `${s.firstName} ${s.lastName}`);
+    const documents = extra.continuing === false ? [] : await docs(['Certificate of grades (previous semester)', 'Certificate of registration'], `${s.firstName} ${s.lastName}`);
     const scores = evalScores(extra.avg ?? 4.5);
     const avg = Object.values(scores).reduce((a, b) => a + b, 0) / EVALUATION_ITEMS.length;
     const steps = [{ status: 'Submitted', changedBy: 'student', changedAt: d('2026-10-05') }];
@@ -383,6 +383,21 @@ function history(steps, office = 'LSO') {
 
   // Weekday duties between Aug 17 and Oct 16 that follow the duty rules.
   const SLOTS = [['08:00', '11:30'], ['13:00', '16:00'], ['09:00', '12:00'], ['14:00', '17:00'], ['13:30', '17:30'], ['08:30', '10:30']];
+  // Last semester's duties (Jan–Apr 2026), 3 hours each, confirmed by the
+  // office head where the office has one.
+  function pastDuties(hours, office) {
+    const out = [];
+    let day = new Date('2026-01-05T00:00:00Z');
+    while (out.length * 3 < hours) {
+      const wd = day.getUTCDay();
+      if (wd >= 1 && wd <= 4) {
+        const date = day.toISOString().slice(0, 10);
+        out.push({ date, timeIn: '08:00', timeOut: '11:00', ...(HEADS[office] ? { status: 'confirmed', reviewedBy: HEADS[office][1], reviewedAt: d(`${date}T18:00:00+08:00`) } : {}) });
+      }
+      day = new Date(day.getTime() + 86400000);
+    }
+    return out;
+  }
   function duties(seed, count) {
     const out = [];
     let day = new Date('2026-08-17T00:00:00Z');
@@ -423,11 +438,12 @@ function history(steps, office = 'LSO') {
     ...realStudents.map((r, i) => logOf(r, i === 0 ? 'Admissions and Scholarship Office' : null, 10 + i * 4, i === 0 ? [claim(assembly, 'Approved'), claim(recollection, 'Pending')] : [])),
     // S[7] has no log yet: no office, nothing logged (for Random assign).
     // Last term (2nd sem 2025–26): where this term's renewing scholars did
-    // duty — that office's head evaluates them (Renewals shows it).
-    { studentNumber: S[6].studentNumber, academicYear: 2025, term: '2nd Semester', officeAssigned: 'Office of the University Registrar', officeAssignedBy: ADMIN, entries: [], specialEvents: [] },
-    { studentNumber: S[10].studentNumber, academicYear: 2025, term: '2nd Semester', officeAssigned: 'Accounting Office', officeAssignedBy: ADMIN, entries: [], specialEvents: [] },
-    { studentNumber: S[11].studentNumber, academicYear: 2025, term: '2nd Semester', officeAssigned: 'Office of the University Registrar', officeAssignedBy: ADMIN, entries: [], specialEvents: [] },
-    { studentNumber: S[9].studentNumber, academicYear: 2025, term: '2nd Semester', officeAssigned: "CICS Dean's Office", officeAssignedBy: ADMIN, entries: [], specialEvents: [] },
+    // duty — that office's head evaluates them (Renewals shows it), and the
+    // hours the renewal check looks at (S[9] is short).
+    { studentNumber: S[6].studentNumber, academicYear: 2025, term: '2nd Semester', officeAssigned: 'Office of the University Registrar', officeAssignedBy: ADMIN, entries: pastDuties(120, 'Office of the University Registrar'), specialEvents: [] },
+    { studentNumber: S[10].studentNumber, academicYear: 2025, term: '2nd Semester', officeAssigned: 'Accounting Office', officeAssignedBy: ADMIN, entries: pastDuties(120, 'Accounting Office'), specialEvents: [] },
+    { studentNumber: S[11].studentNumber, academicYear: 2025, term: '2nd Semester', officeAssigned: 'Office of the University Registrar', officeAssignedBy: ADMIN, entries: pastDuties(120, 'Office of the University Registrar'), specialEvents: [] },
+    { studentNumber: S[9].studentNumber, academicYear: 2025, term: '2nd Semester', officeAssigned: "CICS Dean's Office", officeAssignedBy: ADMIN, entries: pastDuties(30, "CICS Dean's Office"), specialEvents: [] },
   ]);
 
   // Announcements
