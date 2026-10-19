@@ -20,6 +20,9 @@ const renewalRoutes = require('./routes/renewals');
 const dutyHoursRoutes = require('./routes/dutyHours');
 const messageRoutes = require('./routes/messages');
 const officeRoutes = require('./routes/office');
+const automationRoutes = require('./routes/automation');
+const replyTemplateRoutes = require('./routes/replyTemplates');
+const documentZipRoutes = require('./routes/documentZips');
 
 const app = express(); // ✅ Create the app first
 
@@ -78,6 +81,9 @@ app.use('/api/renewals', renewalRoutes);
 app.use('/api/duty-hours', dutyHoursRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/office', officeRoutes);
+app.use('/api/automation', automationRoutes);
+app.use('/api/reply-templates', replyTemplateRoutes);
+app.use('/api/documents', documentZipRoutes);
 // Same router under /api/admin, e.g. POST /api/admin/announcements/:id/facebook/retry.
 app.use('/api/admin/announcements', announcementRoutes);
 
@@ -109,6 +115,14 @@ mongoose.connect(process.env.MONGODB_URI, process.env.MONGODB_DB ? { dbName: pro
     const sendEmails = () => announcementRoutes.processEmailQueue()
       .catch(err => console.error('Sending announcement emails failed:', err));
     setInterval(sendEmails, 60_000);
+    // Reminders, summaries and the term rollover (Automation page), and the
+    // outbox they queue personal emails in.
+    const { runDueJobs } = require('./utils/automation');
+    const { processOutbox } = require('./utils/outbox');
+    const runJobs = () => runDueJobs().catch(err => console.error('Automation failed:', err));
+    setTimeout(runJobs, 30_000);
+    setInterval(runJobs, 15 * 60_000);
+    setInterval(() => processOutbox().catch(err => console.error('Sending queued emails failed:', err)), 60_000);
   })
   .catch(err => {
     console.error('❌ MongoDB connection error:', err.message);
