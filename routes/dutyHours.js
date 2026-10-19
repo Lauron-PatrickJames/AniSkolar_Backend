@@ -8,6 +8,8 @@ const Renewal = require('../models/Renewal');
 const DutyLog = require('../models/DutyLog');
 const DutySetting = require('../models/DutySetting');
 const DutyEvent = require('../models/DutyEvent');
+const OfficeRequest = require('../models/OfficeRequest');
+const { norm, officesWithHeads } = require('../utils/offices');
 const Student = require('../models/Student');
 const { findCurrentHolders } = require('../utils/renewals');
 const { summarize, parseLog, currentTerm, todayInManila, isValidDate } = require('../utils/dutyHours');
@@ -118,7 +120,9 @@ function claimsView(log, eventsById) {
 // The log with the AdSO's required hours in place of the scholar's and
 // approved event claims added as special events (at the event's credit
 // hours), plus `rule` saying where the hours came from and `claims`.
-function logView(log, today, rule, eventsById = new Map()) {
+// headOffices: offices with a head in AniSkolar — their scholars' duties
+// count once the head confirms them.
+function logView(log, today, rule, eventsById = new Map(), headOffices = new Set()) {
   const fromAdso = rule?.requiredHours != null;
   const claims = claimsView(log, eventsById);
   const credited = claims.filter(c => c.status === 'Approved').map(c => ({ name: c.name, hours: c.creditHours, eventId: c.eventId }));
@@ -130,16 +134,16 @@ function logView(log, today, rule, eventsById = new Map()) {
   };
   return {
     log: effective,
-    summary: summarize(effective, today),
+    summary: summarize(effective, today, { confirmationRequired: headOffices.has(norm(log.officeAssigned)) }),
     rule: { percentage: rule?.percentage ?? null, yearGroup: rule?.yearGroup ?? null, requiredHours: fromAdso ? rule.requiredHours : null },
     claims,
   };
 }
 
 // The scholar's copy leaves out who assigned the office.
-function scholarLogView(log, today, rule, eventsById) {
-  const { officeAssignedBy, ...rest } = log;
-  return logView(rest, today, rule, eventsById);
+function scholarLogView(log, today, rule, eventsById, headOffices) {
+  const { officeAssignedBy, evaluation, ...rest } = log;
+  return logView(rest, today, rule, eventsById, headOffices);
 }
 
 router.get('/mine', requireSfagScholar, async (req, res) => {
@@ -156,7 +160,7 @@ router.get('/mine', requireSfagScholar, async (req, res) => {
     res.json({
       current: currentTerm(),
       terms: others.map(({ academicYear, term: t }) => ({ academicYear, term: t })),
-      ...scholarLogView(log ?? empty, todayInManila(), rules.get(req.studentNumber), eventsById),
+      ...scholarLogView(log ?? empty, todayInManila(), rules.get(req.studentNumber), eventsById, await officesWithHeads()),
       // Credited events of the term the scholar can claim.
       events: [...eventsById.values()].map(eventView),
     });
@@ -176,6 +180,17 @@ router.put('/mine', requireSfagScholar, async (req, res) => {
     // Hours set by the AdSO for the scholar's percentage aren't theirs to change.
     const rule = (await dutyRules([req.studentNumber])).get(req.studentNumber);
     if (rule?.requiredHours != null) delete log.requiredHours;
+    // A duty the office head already confirmed or flagged keeps that (and
+    // its id) as long as its date and times are unchanged; a new or edited
+    // duty waits for the head again.
+    const existing = await DutyLog.findOne({ studentNumber: req.studentNumber, ...term }).select('entries').lean();
+    const before = new Map((existing?.entries || []).map(e => [`${e.date}|${e.timeIn}|${e.timeOut}`, e]));
+    log.entries = log.entries.map(e => {
+      const old = before.get(`${e.date}|${e.timeIn}|${e.timeOut}`);
+      if (!old) return e;
+      before.delete(`${e.date}|${e.timeIn}|${e.timeOut}`);
+      return { ...e, _id: old._id, ...(old.status ? { status: old.status, reviewedBy: old.reviewedBy, reviewedAt: old.reviewedAt, note: old.note } : {}) };
+    });
 
     const update = { $set: {}, $unset: {} };
     for (const [key, value] of Object.entries(log)) {
@@ -188,7 +203,7 @@ router.put('/mine', requireSfagScholar, async (req, res) => {
       update,
       { upsert: true, returnDocument: 'after', runValidators: true, setDefaultsOnInsert: true }
     ).lean();
-    res.json(scholarLogView(saved, todayInManila(), rule, await termEvents(term)));
+    res.json(scholarLogView(saved, todayInManila(), rule, await termEvents(term), await officesWithHeads()));
   } catch (err) {
     console.error('Save duty log error:', err);
     res.status(500).json({ error: 'Failed to save your duty hours.' });
@@ -208,14 +223,14 @@ router.get('/admin', requireAdso, async (req, res) => {
     const sfagLoggers = await everSfag(logs.map(l => l.studentNumber).filter(n => !holders.has(n)));
     const logByStudent = new Map(logs.filter(l => holders.has(l.studentNumber) || sfagLoggers.has(l.studentNumber)).map(l => [l.studentNumber, l]));
     const studentNumbers = [...new Set([...holders, ...logByStudent.keys()])];
-    const [rules, eventsById] = await Promise.all([dutyRules(studentNumbers), termEvents(term)]);
+    const [rules, eventsById, headOffices] = await Promise.all([dutyRules(studentNumbers), termEvents(term), officesWithHeads()]);
     const students = await Student.find({ studentNumber: { $in: studentNumbers } })
       .select('studentNumber name email course programCode yearLevel avatarUrl').lean();
     const studentByNumber = new Map(students.map(s => [s.studentNumber, s]));
 
     const scholars = studentNumbers.map(studentNumber => {
       const s = studentByNumber.get(studentNumber);
-      const view = logByStudent.has(studentNumber) ? logView(logByStudent.get(studentNumber), today, rules.get(studentNumber), eventsById) : null;
+      const view = logByStudent.has(studentNumber) ? logView(logByStudent.get(studentNumber), today, rules.get(studentNumber), eventsById, headOffices) : null;
       const log = view?.log;
       const rule = rules.get(studentNumber);
       return {
@@ -293,7 +308,10 @@ router.put('/admin/office-slots', requireAdso, async (req, res) => {
     if (!Array.isArray(input)) return res.status(400).json({ error: 'Enter the offices and their slots.' });
     if (input.length > 200) return res.status(400).json({ error: 'At most 200 offices.' });
     const seen = new Set();
+    const heads = new Set();
     const officeSlots = [];
+    // Head name / email not sent (Random assign) = keep what's saved.
+    const saved = new Map(((await DutySetting.findById('duty').select('officeSlots').lean())?.officeSlots ?? []).map(o => [norm(o.office), o]));
     for (const row of input) {
       const office = typeof row?.office === 'string' ? row.office.replace(/\s+/g, ' ').trim() : '';
       if (!office) return res.status(400).json({ error: 'Every office needs a name.' });
@@ -303,13 +321,52 @@ router.put('/admin/office-slots', requireAdso, async (req, res) => {
       const k = office.toLowerCase();
       if (seen.has(k)) return res.status(400).json({ error: `${office} is listed twice.` });
       seen.add(k);
-      officeSlots.push({ office, slots });
+      const old = saved.get(norm(office));
+      const headName = row.headName === undefined ? old?.headName : String(row.headName || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+      const headEmail = row.headEmail === undefined ? old?.headEmail : String(row.headEmail || '').trim().toLowerCase();
+      if (headEmail) {
+        if (!/^[^\s@]+@dlsud\.edu\.ph$/.test(headEmail)) return res.status(400).json({ error: `The head's email for ${office} must be a @dlsud.edu.ph address.` });
+        if (heads.has(headEmail)) return res.status(400).json({ error: `${headEmail} is the head of two offices; each office needs its own head.` });
+        heads.add(headEmail);
+      }
+      officeSlots.push({ office, slots, ...(headName ? { headName } : {}), ...(headEmail ? { headEmail } : {}) });
     }
     await DutySetting.findByIdAndUpdate('duty', { $set: { officeSlots, updatedBy: req.adminUser.email || req.adminUser.id } }, { upsert: true, runValidators: true });
     res.json(await DutySetting.current());
   } catch (err) {
     console.error('Save office slots error:', err);
     res.status(500).json({ error: 'Failed to save the office slots.' });
+  }
+});
+
+// Office requests (sent from the office portal).
+//   GET   /api/duty-hours/admin/requests?status=open|done|declined
+//   PATCH /api/duty-hours/admin/requests/:id  { status: 'done' | 'declined' | 'open', response }
+router.get('/admin/requests', requireAdso, async (req, res) => {
+  try {
+    const filter = OfficeRequest.STATUSES.includes(req.query.status) ? { status: req.query.status } : {};
+    const requests = await OfficeRequest.find(filter).sort({ status: 1, createdAt: -1 }).limit(300).lean();
+    res.json({ requests, open: await OfficeRequest.countDocuments({ status: 'open' }) });
+  } catch (err) {
+    console.error('Load office requests error:', err);
+    res.status(500).json({ error: 'Failed to load the requests.' });
+  }
+});
+
+router.patch('/admin/requests/:id', requireAdso, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid request.' });
+    const { status } = req.body || {};
+    if (!OfficeRequest.STATUSES.includes(status)) return res.status(400).json({ error: 'Choose Done, Declined or Open.' });
+    const response = typeof req.body.response === 'string' ? req.body.response.trim().slice(0, 1000) : undefined;
+    const request = await OfficeRequest.findByIdAndUpdate(req.params.id, {
+      $set: { status, ...(response !== undefined ? { response } : {}), resolvedBy: status === 'open' ? undefined : (req.adminUser.email || req.adminUser.id), resolvedAt: status === 'open' ? undefined : new Date() },
+    }, { returnDocument: 'after' }).lean();
+    if (!request) return res.status(404).json({ error: 'Request not found.' });
+    res.json({ request });
+  } catch (err) {
+    console.error('Update office request error:', err);
+    res.status(500).json({ error: 'Failed to update the request.' });
   }
 });
 
@@ -392,7 +449,7 @@ router.post('/mine/claims', requireSfagScholar, async (req, res) => {
     ).lean().catch(err => (err.code === 11000 ? null : Promise.reject(err)));
     if (!updated) return res.status(409).json({ error: 'You already claimed this event.' });
     const [rules, eventsById] = await Promise.all([dutyRules([req.studentNumber]), termEvents(term)]);
-    res.status(201).json(scholarLogView(updated, todayInManila(), rules.get(req.studentNumber), eventsById));
+    res.status(201).json(scholarLogView(updated, todayInManila(), rules.get(req.studentNumber), eventsById, await officesWithHeads()));
   } catch (err) {
     console.error('Claim event error:', err);
     res.status(500).json({ error: 'Failed to claim the event.' });
@@ -413,7 +470,7 @@ router.delete('/mine/claims/:eventId', requireSfagScholar, async (req, res) => {
     ).lean();
     if (!updated) return res.status(409).json({ error: 'Only a claim waiting for review can be withdrawn.' });
     const [rules, eventsById] = await Promise.all([dutyRules([req.studentNumber]), termEvents(term)]);
-    res.json(scholarLogView(updated, todayInManila(), rules.get(req.studentNumber), eventsById));
+    res.json(scholarLogView(updated, todayInManila(), rules.get(req.studentNumber), eventsById, await officesWithHeads()));
   } catch (err) {
     console.error('Withdraw claim error:', err);
     res.status(500).json({ error: 'Failed to withdraw the claim.' });
@@ -543,7 +600,7 @@ router.get('/admin/:id', requireAdso, async (req, res) => {
     const log = await DutyLog.findById(req.params.id).lean();
     if (!log) return res.status(404).json({ error: 'Duty log not found.' });
     const [rules, eventsById] = await Promise.all([dutyRules([log.studentNumber]), termEvents(log)]);
-    res.json(logView(log, todayInManila(), rules.get(log.studentNumber), eventsById));
+    res.json(logView(log, todayInManila(), rules.get(log.studentNumber), eventsById, await officesWithHeads()));
   } catch (err) {
     console.error('Load duty log (admin) error:', err);
     res.status(500).json({ error: 'Failed to load the duty log.' });

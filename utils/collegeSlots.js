@@ -3,11 +3,12 @@ const Student = require('../models/Student');
 const { findHeldScholarships } = require('./exclusivity');
 const { COLLEGES } = require('../data/programs');
 
-// Scholarships with a fixed number of scholars per college
-// (`slotsPerCollege` in data/scholarships.js). POLCA takes 2 per college
-// and accepts a new one only when a current scholar graduates or stops
-// (Oct 2026, to confirm with POLCA). A full college can't apply, and its
-// applications can't be approved.
+// Scholarships with a fixed number of scholars (data/scholarships.js):
+//   slotsPerCollege — per college (POLCA: 2 per college)
+//   totalSlots      — in all, campus-wide (Alumni: 2)
+// A new scholar is accepted only when a current one graduates or stops
+// (Oct 2026). When full, students can't apply and applications can't be
+// approved.
 
 // Student numbers holding `scholarshipId` now (same rule as
 // findHeldScholarships, checked per approved applicant).
@@ -22,9 +23,26 @@ async function currentHolders(scholarshipId, { excludeStudent } = {}) {
   return holders;
 }
 
-// Null when the student's college has a free slot (or the scholarship has
-// no slots, or the student's college isn't known); otherwise
-// { college, collegeName, slots, holders: [{ studentNumber, name }], message }.
+// Null when there's a free slot for this student (or the scholarship has no
+// slots); otherwise { slots, holders: [{ studentNumber, name }], message }
+// (plus college / collegeName for per-college slots).
+async function slotsFull(scholarship, studentNumber) {
+  if (scholarship?.totalSlots) {
+    const holders = await currentHolders(scholarship.id, { excludeStudent: studentNumber });
+    if (holders.length < scholarship.totalSlots) return null;
+    const students = await Student.find({ studentNumber: { $in: holders } }).select('studentNumber name').lean();
+    const slots = scholarship.totalSlots;
+    return {
+      slots,
+      holders: students.map(s => ({ studentNumber: s.studentNumber, name: s.name })),
+      message: `The ${scholarship.name} takes only ${slots} scholars in all, and ${slots === 2 ? 'both' : 'all'} slots are taken. A slot opens when a current scholar graduates or stops.`,
+    };
+  }
+  return collegeSlotsFull(scholarship, studentNumber);
+}
+
+// Per-college slots: null when the student's college has a free slot (or
+// the student's college isn't known).
 async function collegeSlotsFull(scholarship, studentNumber) {
   if (!scholarship?.slotsPerCollege) return null;
   const student = await Student.findOne({ studentNumber }).select('college').lean();
@@ -45,4 +63,4 @@ async function collegeSlotsFull(scholarship, studentNumber) {
   };
 }
 
-module.exports = { currentHolders, collegeSlotsFull };
+module.exports = { currentHolders, slotsFull };

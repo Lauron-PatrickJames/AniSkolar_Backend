@@ -10,6 +10,8 @@ const Application = require('../models/Application');
 const { putFile, deleteFile, openFile } = require('../utils/gridfs');
 const { sendMail } = require('../utils/mailer');
 const { renderEmail } = require('../utils/emailTemplate');
+const { requireOfficeHead } = require('../middleware/requireOfficeHead');
+const { listOffices, norm } = require('../utils/offices');
 
 // Messages between students and the AdSO (one conversation per student).
 //
@@ -24,6 +26,10 @@ const { renderEmail } = require('../utils/emailTemplate');
 //   GET  /api/messages/admin/threads/:studentNumber        one conversation + the student
 //   POST /api/messages/admin/threads/:studentNumber        send (multipart, as above)
 //   POST /api/messages/admin/threads/:studentNumber/read   mark the student's messages read
+//   GET  /api/messages/admin/offices/:office (+ POST, POST …/read)   a duty office's conversation
+// Office head (office portal):
+//   GET  /api/messages/office/mine · GET …/mine/unread · POST …/mine/read · POST …/mine
+//   GET  /api/messages/office/files/:fileId
 // Both:
 //   GET  /api/messages/files/:fileId   an attachment (the conversation's student, or the AdSO)
 //
@@ -70,7 +76,9 @@ function view(m) {
 }
 
 // Validates and stores a new message. Returns { message } or { status, error }.
-async function createMessage(req, { studentNumber, from, authorEmail, authorName }) {
+// The thread is a student's ({ studentNumber }) or a duty office's ({ office }).
+async function createMessage(req, { studentNumber, office, from, authorEmail, authorName }) {
+  const thread = studentNumber ? { studentNumber } : { office };
   const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
   const files = req.files || [];
   if (!body && !files.length) return { status: 400, error: 'Write a message or attach a file.' };
@@ -78,7 +86,7 @@ async function createMessage(req, { studentNumber, from, authorEmail, authorName
   if (files.some(f => !looksLike(f))) return { status: 400, error: "One of the files isn't a real JPG, PNG or PDF." };
 
   let application = null;
-  if (req.body?.applicationId) {
+  if (req.body?.applicationId && studentNumber) {
     if (!mongoose.Types.ObjectId.isValid(req.body.applicationId)) return { status: 400, error: 'Invalid application.' };
     application = await Application.findOne({ _id: req.body.applicationId, studentNumber }).select('referenceCode').lean();
     if (!application) return { status: 400, error: "That application isn't this student's." };
@@ -86,16 +94,16 @@ async function createMessage(req, { studentNumber, from, authorEmail, authorName
 
   // One alert per burst: skip the email while this side's earlier
   // messages are still unread.
-  const alreadyWaiting = await Message.exists({ studentNumber, from, readAt: null });
+  const alreadyWaiting = await Message.exists({ ...thread, from, readAt: null });
 
   const stored = [];
   try {
     for (const f of files) {
-      const fileId = await putFile({ buffer: f.buffer, filename: f.originalname, mimetype: f.mimetype, metadata: { kind: 'message', studentNumber } });
+      const fileId = await putFile({ buffer: f.buffer, filename: f.originalname, mimetype: f.mimetype, metadata: { kind: 'message', ...thread } });
       stored.push({ fileId, filename: f.originalname, mimetype: f.mimetype, size: f.size });
     }
     const message = await Message.create({
-      studentNumber, from, authorEmail, authorName, body, attachments: stored,
+      ...thread, from, authorEmail, authorName, body, attachments: stored,
       ...(application ? { applicationId: application._id, applicationRef: application.referenceCode } : {}),
     });
     return { message, alreadyWaiting };
@@ -167,17 +175,20 @@ router.post('/mine', requireStudent, withUpload, async (req, res) => {
 
 router.get('/admin/threads', requireAdso, async (req, res) => {
   try {
-    const threads = await Message.aggregate([
+    const group = (key, from) => Message.aggregate([
+      { $match: { [key]: { $nin: [null, ''] } } },
       { $sort: { createdAt: -1 } },
       { $group: {
-        _id: '$studentNumber',
+        _id: `$${key}`,
         last: { $first: '$$ROOT' },
-        unread: { $sum: { $cond: [{ $and: [{ $eq: ['$from', 'student'] }, { $eq: ['$readAt', null] }] }, 1, 0] } },
+        unread: { $sum: { $cond: [{ $and: [{ $eq: ['$from', from] }, { $eq: ['$readAt', null] }] }, 1, 0] } },
         count: { $sum: 1 },
       } },
       { $sort: { 'last.createdAt': -1 } },
       { $limit: 500 },
     ]);
+    const [threads, officeThreads, offices] = await Promise.all([group('studentNumber', 'student'), group('office', 'office'), listOffices()]);
+    const headOf = new Map(offices.map(o => [norm(o.office), o]));
     const students = await Student.find({ studentNumber: { $in: threads.map(t => t._id) } })
       .select('studentNumber name email programCode college yearLevel avatarUrl').lean();
     const byNumber = new Map(students.map(s => [s.studentNumber, s]));
@@ -185,6 +196,7 @@ router.get('/admin/threads', requireAdso, async (req, res) => {
       threads: threads.map(t => {
         const s = byNumber.get(t._id);
         return {
+          kind: 'student',
           studentNumber: t._id,
           name: s?.name ?? '',
           email: s?.email ?? '',
@@ -196,7 +208,16 @@ router.get('/admin/threads', requireAdso, async (req, res) => {
           count: t.count,
           last: view(t.last),
         };
-      }),
+      }).concat(officeThreads.map(t => ({
+        kind: 'office',
+        office: t._id,
+        name: t._id,
+        email: headOf.get(norm(t._id))?.headEmail ?? '',
+        headName: headOf.get(norm(t._id))?.headName ?? '',
+        unread: t.unread,
+        count: t.count,
+        last: view(t.last),
+      }))).sort((a, b) => new Date(b.last.createdAt) - new Date(a.last.createdAt)),
     });
   } catch (err) {
     console.error('Load message threads error:', err);
@@ -206,7 +227,7 @@ router.get('/admin/threads', requireAdso, async (req, res) => {
 
 router.get('/admin/unread', requireAdso, async (req, res) => {
   try {
-    res.json({ unread: await Message.countDocuments({ from: 'student', readAt: null }) });
+    res.json({ unread: await Message.countDocuments({ from: { $in: ['student', 'office'] }, readAt: null }) });
   } catch (err) {
     console.error('Unread messages (admin) error:', err);
     res.status(500).json({ error: 'Failed to load messages.' });
@@ -271,6 +292,129 @@ router.post('/admin/threads/:studentNumber/read', requireAdso, async (req, res) 
   } catch (err) {
     console.error('Mark thread read error:', err);
     res.status(500).json({ error: 'Failed to update the conversation.' });
+  }
+});
+
+// --- Duty offices ----------------------------------------------------------------
+
+// A duty office from the AdSO's list (by name, ignoring case), or null.
+async function findOffice(name) {
+  if (typeof name !== 'string' || !name.trim()) return null;
+  return (await listOffices()).find(o => norm(o.office) === norm(name)) ?? null;
+}
+
+router.get('/admin/offices/:office', requireAdso, async (req, res) => {
+  try {
+    const office = await findOffice(req.params.office);
+    if (!office) return res.status(404).json({ error: 'Office not found.' });
+    const messages = await Message.find({ office: office.office }).sort({ createdAt: 1 }).limit(1000).lean();
+    res.json({ office: { office: office.office, headName: office.headName ?? '', headEmail: office.headEmail ?? '' }, messages: messages.map(view) });
+  } catch (err) {
+    console.error('Load office thread error:', err);
+    res.status(500).json({ error: 'Failed to load the conversation.' });
+  }
+});
+
+router.post('/admin/offices/:office', requireAdso, withUpload, async (req, res) => {
+  try {
+    const office = await findOffice(req.params.office);
+    if (!office) return res.status(404).json({ error: 'Office not found.' });
+    const result = await createMessage(req, { office: office.office, from: 'adso', authorEmail: req.adminUser.email, authorName: req.adminUser.name });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    if (!result.alreadyWaiting && office.headEmail) {
+      const email = renderEmail({
+        heading: 'You have a new message',
+        intro: `The Admissions and Scholarship Office sent ${office.office} a message on AniSkolar:`,
+        body: preview(result.message),
+        button: { url: appUrl(), label: 'Reply in AniSkolar' },
+      });
+      sendMail({ to: office.headEmail, subject: 'AniSkolar: new message from the Admissions and Scholarship Office', ...email });
+    }
+    res.status(201).json({ message: view(result.message) });
+  } catch (err) {
+    console.error('Send office message (admin) error:', err);
+    res.status(500).json({ error: 'Failed to send the message.' });
+  }
+});
+
+router.post('/admin/offices/:office/read', requireAdso, async (req, res) => {
+  try {
+    const office = await findOffice(req.params.office);
+    if (!office) return res.status(404).json({ error: 'Office not found.' });
+    await Message.updateMany({ office: office.office, from: 'office', readAt: null }, { $set: { readAt: new Date() } });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Mark office thread read error:', err);
+    res.status(500).json({ error: 'Failed to update the conversation.' });
+  }
+});
+
+router.get('/office/mine', requireOfficeHead, async (req, res) => {
+  try {
+    const messages = await Message.find({ office: req.officeHead.office }).sort({ createdAt: 1 }).limit(1000).lean();
+    res.json({ messages: messages.map(view) });
+  } catch (err) {
+    console.error('Load office messages error:', err);
+    res.status(500).json({ error: 'Failed to load your messages.' });
+  }
+});
+
+router.get('/office/mine/unread', requireOfficeHead, async (req, res) => {
+  try {
+    res.json({ unread: await Message.countDocuments({ office: req.officeHead.office, from: 'adso', readAt: null }) });
+  } catch (err) {
+    console.error('Office unread error:', err);
+    res.status(500).json({ error: 'Failed to load your messages.' });
+  }
+});
+
+router.post('/office/mine/read', requireOfficeHead, async (req, res) => {
+  try {
+    await Message.updateMany({ office: req.officeHead.office, from: 'adso', readAt: null }, { $set: { readAt: new Date() } });
+    res.json({ unread: 0 });
+  } catch (err) {
+    console.error('Office read error:', err);
+    res.status(500).json({ error: 'Failed to update your messages.' });
+  }
+});
+
+router.post('/office/mine', requireOfficeHead, withUpload, async (req, res) => {
+  try {
+    const { office, name, email } = req.officeHead;
+    const result = await createMessage(req, { office, from: 'office', authorEmail: email, authorName: name ? `${name} (${office})` : office });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    if (!result.alreadyWaiting && process.env.ADSO_NOTIFY_EMAIL) {
+      const mail = renderEmail({
+        heading: `New message from ${office}`,
+        intro: `${name || email} (${office}) sent a message on AniSkolar:`,
+        body: preview(result.message),
+        button: { url: appUrl(), label: 'Reply in AniSkolar' },
+      });
+      sendMail({ to: process.env.ADSO_NOTIFY_EMAIL, subject: `AniSkolar: new message from ${office}`, ...mail });
+    }
+    res.status(201).json({ message: view(result.message) });
+  } catch (err) {
+    console.error('Send office message error:', err);
+    res.status(500).json({ error: 'Failed to send your message.' });
+  }
+});
+
+router.get('/office/files/:fileId', requireOfficeHead, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) return res.status(400).json({ error: 'Invalid file id.' });
+    const fileId = new mongoose.Types.ObjectId(req.params.fileId);
+    const message = await Message.findOne({ 'attachments.fileId': fileId, office: req.officeHead.office }).select('attachments').lean();
+    if (!message) return res.status(404).json({ error: 'File not found.' });
+    const meta = message.attachments.find(a => String(a.fileId) === String(fileId));
+    const file = await openFile(fileId);
+    if (!file) return res.status(404).json({ error: 'File not found.' });
+    res.set('Content-Type', meta?.mimetype || file.contentType || 'application/octet-stream');
+    res.set('Cache-Control', 'private, no-store');
+    res.set('X-Content-Type-Options', 'nosniff');
+    file.stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.end(); }).pipe(res);
+  } catch (err) {
+    console.error('Office message file error:', err);
+    res.status(500).json({ error: 'Failed to load the file.' });
   }
 });
 

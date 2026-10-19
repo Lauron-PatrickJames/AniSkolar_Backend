@@ -16,7 +16,7 @@ const { officeFilter, scopedOffice } = require('../utils/officeScope');
 const { academicYearStartExpr, inSfagApplicationWindow } = require('../utils/academicYear');
 const { nextReferenceCode } = require('../utils/referenceCode');
 const { otherScholarshipsHeld } = require('../utils/exclusivity');
-const { collegeSlotsFull } = require('../utils/collegeSlots');
+const { slotsFull } = require('../utils/collegeSlots');
 const {
   isGrantFormType,
   parseGrantSections,
@@ -182,9 +182,10 @@ router.post('/', requireStudent, (req, res) => {
         return res.status(400).json({ error: SFAG_WINDOW_MESSAGE });
       }
 
-      // Scholarships with slots per college (POLCA: 2): a full college
-      // can't apply until a current scholar graduates or stops.
-      const full = await collegeSlotsFull(scholarship, studentNumber);
+      // Scholarships with a fixed number of scholars (POLCA: 2 per college;
+      // Alumni: 2 in all): when full, no one can apply until a current
+      // scholar graduates or stops.
+      const full = await slotsFull(scholarship, studentNumber);
       if (full) return res.status(409).json({ code: 'college_slots_full', error: full.message });
 
       // Applying is never blocked by another scholarship: only one
@@ -847,10 +848,10 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
       }
     }
 
-    // Slots per college (POLCA: 2): no approving while the applicant's
-    // college is full.
+    // Fixed number of scholars (POLCA per college, Alumni in all): no
+    // approving while full.
     if (status === 'Approved') {
-      const full = await collegeSlotsFull(findScholarship(application.scholarshipId), application.studentNumber);
+      const full = await slotsFull(findScholarship(application.scholarshipId), application.studentNumber);
       if (full) {
         return res.status(409).json({
           code: 'college_slots_full',
