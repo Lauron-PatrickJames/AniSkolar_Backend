@@ -8,7 +8,11 @@ const { requireScholar } = require('../middleware/requireStudent');
 const { storeFilesInGridFS } = require('../utils/gridfs');
 const { scopedOffice } = require('../utils/officeScope');
 const { findScholarship, acceptsOnlineApplications } = require('../data/scholarships');
-const { findHolders, parseEvaluationScores, PASSING_AVERAGE } = require('../utils/renewals');
+const { findHolders, parseEvaluationScores, previousTerm, PASSING_AVERAGE } = require('../utils/renewals');
+const DutyLog = require('../models/DutyLog');
+const { listOffices, norm } = require('../utils/offices');
+const { sendMail } = require('../utils/mailer');
+const { renderEmail } = require('../utils/emailTemplate');
 const Renewal = require('../models/Renewal');
 const RenewalPeriod = require('../models/RenewalPeriod');
 const Student = require('../models/Student');
@@ -200,6 +204,11 @@ router.post('/', requireScholar, withUploads(async (req, res) => {
     const scholarship = findScholarship(period.scholarshipId);
     const now = new Date();
     const status = parsed.fields.continuing ? 'Under Evaluation' : 'Not Continuing';
+    // The office head may already have evaluated the term this looks back on.
+    const prev = previousTerm(period);
+    const lastTermLog = parsed.fields.continuing
+      ? await DutyLog.findOne({ studentNumber: req.studentNumber, academicYear: prev.academicYear, term: prev.term }).select('evaluation').lean()
+      : null;
     const renewal = await Renewal.create({
       periodId: period._id,
       studentNumber: req.studentNumber,
@@ -211,6 +220,7 @@ router.post('/', requireScholar, withUploads(async (req, res) => {
       ...parsed.fields,
       documents,
       status,
+      ...(lastTermLog?.evaluation?.average ? { evaluation: lastTermLog.evaluation } : {}),
       history: [
         { status: 'Submitted', changedBy: 'student', changedAt: now },
         ...(status === 'Not Continuing' ? [{ status, note: parsed.fields.notContinuingReason, changedBy: 'student', changedAt: now }] : []),
@@ -306,6 +316,8 @@ router.post('/admin/periods', requireAdso, async (req, res) => {
       createdBy: req.adminUser.email || req.adminUser.id,
       updatedBy: req.adminUser.email || req.adminUser.id,
     });
+    // Office heads with scholars to evaluate get one email (in the background).
+    notifyOfficeHeads(created).catch(err => console.error('Emailing office heads failed:', err));
     res.status(201).json({ period: { ...periodView(created), counts: {} } });
   } catch (err) {
     if (err.code === 11000) return res.status(409).json({ error: 'That scholarship already has a renewal period for this term.' });
@@ -341,6 +353,55 @@ router.patch('/admin/periods/:id', requireAdso, async (req, res) => {
 // Every scholar who holds the scholarship for the period, with their
 // renewal if they submitted one ("missing" = holders without one), plus any
 // renewal from a scholar no longer counted as a holder.
+// The office each scholar rendered duty in during the term a renewal looks
+// back on (the term before the period's; its head does the evaluation),
+// from Duty hours. Returns { term, offices: Map studentNumber -> office }.
+async function dutyOfficesFor(period, studentNumbers) {
+  const term = previousTerm(period);
+  if (!studentNumbers.length) return { term, offices: new Map() };
+  const logs = await DutyLog.find({ studentNumber: { $in: studentNumbers }, academicYear: term.academicYear, term: term.term, officeAssigned: { $nin: [null, ''] } })
+    .select('studentNumber officeAssigned').lean();
+  return { term, offices: new Map(logs.map(l => [l.studentNumber, l.officeAssigned])) };
+}
+
+// Emails the heads of offices with scholars to evaluate for this period
+// (one email, heads in BCC). Returns how many heads were emailed.
+async function notifyOfficeHeads(period) {
+  if (!period.open || !period.requiresEvaluation) return 0;
+  const prev = previousTerm(period);
+  const holders = await findHolders(period);
+  const logs = await DutyLog.find({ academicYear: prev.academicYear, term: prev.term, studentNumber: { $in: [...holders.keys()] }, officeAssigned: { $nin: [null, ''] } }).select('officeAssigned').lean();
+  const withScholars = new Set(logs.map(l => norm(l.officeAssigned)));
+  const heads = (await listOffices()).filter(o => o.headEmail && withScholars.has(norm(o.office))).map(o => o.headEmail);
+  if (!heads.length) return 0;
+  const name = findScholarship(period.scholarshipId)?.name ?? 'scholarship';
+  const appUrl = process.env.APP_URL || (process.env.FRONTEND_ORIGINS || '').split(',')[0].trim() || 'http://localhost:3000';
+  const email = renderEmail({
+    heading: 'Scholar evaluations are open',
+    intro: `Please evaluate the ${name} scholars who rendered duty in your office during the ${prev.term}, A.Y. ${prev.academicYear}–${prev.academicYear + 1}.`,
+    body: `Sign in to AniSkolar with your school email and open Evaluations. Each scholar is rated 1–5 on the usual items; it takes a few minutes per scholar.${period.deadline ? `\n\nRenewal deadline: ${period.deadline}` : ''}`,
+    button: { url: appUrl, label: 'Open AniSkolar' },
+  });
+  for (let i = 0; i < heads.length; i += 50) {
+    await sendMail({ to: process.env.ACS_EMAIL_SENDER, bcc: heads.slice(i, i + 50), subject: `AniSkolar: please evaluate your ${name} scholars`, ...email });
+  }
+  return heads.length;
+}
+
+// POST /api/renewals/admin/periods/:id/notify-offices — remind office heads.
+router.post('/admin/periods/:id/notify-offices', requireAdso, async (req, res) => {
+  try {
+    if (!isObjectId(req.params.id)) return res.status(400).json({ error: 'Invalid period id.' });
+    const period = await RenewalPeriod.findById(req.params.id).lean();
+    if (!period) return res.status(404).json({ error: 'Renewal period not found.' });
+    if (!period.open || !period.requiresEvaluation) return res.status(400).json({ error: 'This period isn’t open for evaluations.' });
+    res.json({ emailed: await notifyOfficeHeads(period) });
+  } catch (err) {
+    console.error('Notify office heads error:', err);
+    res.status(500).json({ error: 'Failed to email the office heads.' });
+  }
+});
+
 router.get('/admin/periods/:id/scholars', requireAdmin, async (req, res) => {
   try {
     if (!isObjectId(req.params.id)) return res.status(400).json({ error: 'Invalid period id.' });
@@ -358,6 +419,7 @@ router.get('/admin/periods/:id/scholars', requireAdmin, async (req, res) => {
     const students = await Student.find({ studentNumber: { $in: studentNumbers } })
       .select('studentNumber name email course programCode yearLevel avatarUrl').lean();
     const studentByNumber = new Map(students.map(s => [s.studentNumber, s]));
+    const duty = await dutyOfficesFor(period, studentNumbers);
 
     const scholars = studentNumbers.map(studentNumber => {
       const student = studentByNumber.get(studentNumber);
@@ -371,10 +433,12 @@ router.get('/admin/periods/:id/scholars', requireAdmin, async (req, res) => {
         avatarUrl: student?.avatarUrl,
         holder: holder ? { referenceCode: holder.referenceCode, renewedFrom: holder.renewedFrom } : null,
         renewal: renewalByStudent.get(studentNumber) ?? null,
+        // Where they did duty in the term being evaluated (Duty hours).
+        dutyOffice: duty.offices.get(studentNumber) ?? null,
       };
     });
 
-    res.json({ period: periodView(period), passingAverage: PASSING_AVERAGE, scholars });
+    res.json({ period: periodView(period), passingAverage: PASSING_AVERAGE, scholars, dutyTerm: duty.term });
   } catch (err) {
     console.error('Load renewal scholars error:', err);
     res.status(500).json({ error: 'Failed to load scholars for this renewal.' });
@@ -402,14 +466,19 @@ router.patch('/admin/:id/evaluation', requireAdmin, async (req, res) => {
     const { scores, average, error } = parseEvaluationScores(body.scores);
     if (error) return res.status(400).json({ error });
     const text = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '') || undefined;
+    // The evaluating office defaults to the scholar's duty office for the
+    // term being evaluated.
+    const dutyOffice = text(body.assignedOffice, 200)
+      ?? (await dutyOfficesFor(renewal, [renewal.studentNumber])).offices.get(renewal.studentNumber);
     renewal.evaluation = {
       scores,
       average,
       evaluatorName: text(body.evaluatorName, 200),
-      assignedOffice: text(body.assignedOffice, 200),
+      assignedOffice: dutyOffice || undefined,
       remarks: text(body.remarks, 2000),
       enteredBy: req.adminUser.email,
       enteredAt: new Date(),
+      source: 'adso',
     };
     await renewal.save();
     res.json({ renewal });

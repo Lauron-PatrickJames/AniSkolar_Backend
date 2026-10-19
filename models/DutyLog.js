@@ -9,11 +9,33 @@ const mongoose = require('mongoose');
 
 const TERMS = ['1st Semester', '2nd Semester'];
 
+// The office head confirms each duty (routes/office.js): 'confirmed' or
+// 'flagged' (with a note); unset = waiting. When the scholar's office has
+// a head in AniSkolar, only confirmed duties count (utils/dutyHours.js).
+const ENTRY_STATUSES = ['confirmed', 'flagged'];
 const entrySchema = new mongoose.Schema({
   date: { type: String, required: true },     // YYYY-MM-DD
   timeIn: { type: String, required: true },   // HH:mm, 24-hour
   timeOut: { type: String, required: true },
+  status: { type: String, enum: ENTRY_STATUSES },
+  reviewedBy: String,                         // the head's email
+  reviewedAt: Date,
+  note: { type: String, trim: true, maxlength: 500 },
 }, { _id: true });
+
+// The office head's evaluation of the scholar's duty this term (the 1–5
+// ratings of utils/renewals.js EVALUATION_ITEMS), entered in the office
+// portal; it's copied into the renewal that looks back on this term.
+const evaluationSchema = new mongoose.Schema({
+  scores: { type: mongoose.Schema.Types.Mixed },
+  average: Number,
+  evaluatorName: { type: String, trim: true, maxlength: 200 },
+  assignedOffice: { type: String, trim: true, maxlength: 200 },
+  remarks: { type: String, trim: true, maxlength: 2000 },
+  enteredBy: String,
+  enteredAt: Date,
+  source: { type: String, enum: ['office', 'adso'] },
+}, { _id: false });
 
 const specialEventSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true, maxlength: 200 },
@@ -46,6 +68,7 @@ const dutyLogSchema = new mongoose.Schema({
   // accepted from scholars; kept so old logs still add up.
   specialEvents: { type: [specialEventSchema], default: [] },
   eventClaims: { type: [eventClaimSchema], default: [] },
+  evaluation: { type: evaluationSchema },
 }, { timestamps: true });
 
 dutyLogSchema.index({ studentNumber: 1, academicYear: 1, term: 1 }, { unique: true });
@@ -53,3 +76,4 @@ dutyLogSchema.index({ studentNumber: 1, academicYear: 1, term: 1 }, { unique: tr
 module.exports = mongoose.model('DutyLog', dutyLogSchema);
 module.exports.TERMS = TERMS;
 module.exports.CLAIM_STATUSES = CLAIM_STATUSES;
+module.exports.ENTRY_STATUSES = ENTRY_STATUSES;

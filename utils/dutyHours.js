@@ -47,8 +47,14 @@ function daysBetween(a, b) {
 
 // Totals for a log. `today` (YYYY-MM-DD) decides how many weeks are left
 // before the deadline for "weekly hours needed".
-function summarize(log, today) {
-  const regular = (log.entries || []).reduce((sum, e) => sum + entryHours(e), 0);
+// confirmationRequired: the scholar's office has a head in AniSkolar, so
+// only duties the head confirmed count; the rest are waiting (or flagged).
+function summarize(log, today, { confirmationRequired = false } = {}) {
+  const entries = log.entries || [];
+  const counts = e => !confirmationRequired || e.status === 'confirmed';
+  const regular = entries.filter(counts).reduce((sum, e) => sum + entryHours(e), 0);
+  const waitingHours = confirmationRequired ? entries.filter(e => !e.status).reduce((sum, e) => sum + entryHours(e), 0) : 0;
+  const flagged = entries.filter(e => e.status === 'flagged').length;
   const special = (log.specialEvents || []).reduce((sum, e) => sum + (e.hours || 0), 0);
   const completed = round2(regular + special);
   const required = log.requiredHours ?? null;
@@ -70,6 +76,10 @@ function summarize(log, today) {
     remaining,
     weeklyNeeded,
     lastDutyDate: dates[dates.length - 1] ?? null,
+    confirmationRequired,
+    waitingHours: round2(waitingHours),
+    waitingCount: confirmationRequired ? entries.filter(e => !e.status).length : 0,
+    flaggedCount: flagged,
   };
 }
 

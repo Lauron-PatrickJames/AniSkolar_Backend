@@ -27,6 +27,7 @@
 //
 // slotsPerCollege: at most this many current scholars per college; a full
 // college can't apply or be approved (utils/collegeSlots.js).
+// totalSlots: at most this many current scholars in all (campus-wide).
 //
 // For the grant-form scholarships (applicationFormType 'polca' / 'alumni'):
 //   - eligibility: the rules checked at apply time (utils/grantForms.js).
@@ -84,6 +85,10 @@ const SCHOLARSHIPS = [
     office: 'ALUMNI',
     formType: 'alumni',
     referenceCode: 'DAA',
+    // 2 scholars for the whole campus, kept until they graduate; no
+    // renewals (Oct 2026).
+    noRenewal: true,
+    totalSlots: 2,
     eligibility: {
       alumniInstitutions: ALUMNI_INSTITUTIONS,
       alumniRelationships: ALUMNI_RELATIONSHIPS,

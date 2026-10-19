@@ -30,9 +30,13 @@ const groupSchema = new mongoose.Schema({ p100: hoursField, p75: hoursField, p50
 // How many scholars each office takes, for the AdSO's "Random assign"
 // (AdSO, Oct 2026: assignment is random; bigger offices such as the
 // Registrar, Accounting and Admissions take more). Kept across terms.
+// Also the list of duty offices and their heads: a head signs in with
+// this school email and gets the office portal (routes/office.js).
 const officeSlotSchema = new mongoose.Schema({
   office: { type: String, required: true, trim: true, maxlength: 200 },
   slots: { type: Number, required: true, min: 0, max: 50 },
+  headName: { type: String, trim: true, maxlength: 200 },
+  headEmail: { type: String, trim: true, lowercase: true, maxlength: 200 },
 }, { _id: false });
 
 const dutySettingSchema = new mongoose.Schema({

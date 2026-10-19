@@ -39,6 +39,8 @@ const evaluationSchema = new mongoose.Schema({
   remarks: { type: String, trim: true, maxlength: 2000 },
   enteredBy: String,
   enteredAt: Date,
+  // 'office' = entered by the office head in the office portal.
+  source: { type: String, enum: ['office', 'adso'] },
 }, { _id: false });
 
 const renewalSchema = new mongoose.Schema({

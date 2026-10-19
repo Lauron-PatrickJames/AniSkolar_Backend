@@ -19,6 +19,7 @@ const fseRoutes = require('./routes/fse');
 const renewalRoutes = require('./routes/renewals');
 const dutyHoursRoutes = require('./routes/dutyHours');
 const messageRoutes = require('./routes/messages');
+const officeRoutes = require('./routes/office');
 
 const app = express(); // ✅ Create the app first
 
@@ -76,6 +77,7 @@ app.use('/api/fse', fseRoutes);
 app.use('/api/renewals', renewalRoutes);
 app.use('/api/duty-hours', dutyHoursRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/office', officeRoutes);
 // Same router under /api/admin, e.g. POST /api/admin/announcements/:id/facebook/retry.
 app.use('/api/admin/announcements', announcementRoutes);
 
