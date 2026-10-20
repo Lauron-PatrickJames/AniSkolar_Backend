@@ -1,0 +1,60 @@
+# Render Blueprint for the AniSkolar API (render.com → New → Blueprint).
+# Singapore, next to the MongoDB Atlas cluster (AWS ap-southeast-1) and the
+# Azure storage / email in Southeast Asia. Settings marked `sync: false`
+# are typed into Render's dashboard when the Blueprint is created; copy
+# them from your backend .env. Never put their values in this file.
+#
+# plan: free sleeps after 15 minutes without visits (the first visit then
+# takes about a minute, and the timers — scheduled announcements, the email
+# outbox, Automation — pause while it sleeps). Change it to `starter` for
+# real use.
+services:
+  - type: web
+    name: aniskolar-api
+    runtime: node
+    region: singapore
+    plan: free
+    branch: claude/youthful-hawking-4wghiu
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: AZURE_STORAGE_CONNECTION_STRING
+        sync: false
+      - key: AZURE_STORAGE_CONTAINER
+        value: aniskolar-files
+      - key: ACS_EMAIL_CONNECTION_STRING
+        sync: false
+      - key: ACS_EMAIL_SENDER
+        sync: false
+      - key: ADSO_NOTIFY_EMAIL
+        sync: false
+      - key: EMAIL_SIGNATURE
+        sync: false
+      - key: ANNOUNCEMENT_EMAIL_BATCHES_PER_MINUTE
+        value: "1"
+      - key: EMAIL_SENDS_PER_MINUTE
+        value: "1"
+      - key: FB_PAGE_ID
+        sync: false
+      - key: FB_PAGE_ACCESS_TOKEN
+        sync: false
+      - key: FB_GRAPH_VERSION
+        sync: false
+      # The frontend's address (Vercel), e.g. https://aniskolar.vercel.app —
+      # no slash at the end. Fill in once the frontend is deployed.
+      - key: FRONTEND_ORIGINS
+        sync: false
+      - key: APP_URL
+        sync: false
+      # Demo only: "true" lets the SFAG open outside June–July. Leave empty
+      # in production.
+      - key: SFAG_OPEN_ALL_YEAR
+        sync: false
