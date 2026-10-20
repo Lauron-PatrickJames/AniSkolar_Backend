@@ -9,7 +9,16 @@ const Message = require('../models/Message');
 const Student = require('../models/Student');
 const Application = require('../models/Application');
 const { putFile, deleteFile, openFile } = require('../utils/gridfs');
-const { sendMail } = require('../utils/mailer');
+const { queueEmails, processOutbox } = require('../utils/outbox');
+
+// The email alert for a new message ("you have a new message"), through the
+// outbox (utils/outbox.js): sent within the sender's limits and retried
+// instead of lost. Never fails the request.
+function alertByEmail(message, { to, subject, email }) {
+  queueEmails([{ key: `message:${message._id}`, kind: 'messageAlert', priority: 1, to, subject, ...email }])
+    .then(n => n && processOutbox())
+    .catch(err => console.error('Queueing the message alert failed:', err));
+}
 const { renderEmail } = require('../utils/emailTemplate');
 const { requireOfficeHead } = require('../middleware/requireOfficeHead');
 const { listOffices, norm } = require('../utils/offices');
@@ -166,7 +175,7 @@ router.post('/mine', requireStudent, withUpload, async (req, res) => {
         body: preview(result.message),
         button: { url: appUrl(), label: 'Reply in AniSkolar' },
       });
-      sendMail({ to: process.env.ADSO_NOTIFY_EMAIL, subject: `AniSkolar: new message from ${student?.name || req.studentNumber} (${req.studentNumber})`, ...email });
+      alertByEmail(result.message, { to: process.env.ADSO_NOTIFY_EMAIL, subject: `AniSkolar: new message from ${student?.name || req.studentNumber} (${req.studentNumber})`, email });
     }
     res.status(201).json({ message: view(result.message) });
   } catch (err) {
@@ -278,7 +287,7 @@ router.post('/admin/threads/:studentNumber', requireAdso, withUpload, async (req
         body: preview(result.message),
         button: { url: appUrl(), label: 'Reply in AniSkolar' },
       });
-      sendMail({ to: student.email, subject: 'AniSkolar: new message from the Admissions and Scholarship Office', ...email });
+      alertByEmail(result.message, { to: student.email, subject: 'AniSkolar: new message from the Admissions and Scholarship Office', email });
     }
     res.status(201).json({ message: view(result.message) });
   } catch (err) {
@@ -332,7 +341,7 @@ router.post('/admin/offices/:office', requireAdso, withUpload, async (req, res) 
         body: preview(result.message),
         button: { url: appUrl(), label: 'Reply in AniSkolar' },
       });
-      sendMail({ to: office.headEmail, subject: 'AniSkolar: new message from the Admissions and Scholarship Office', ...email });
+      alertByEmail(result.message, { to: office.headEmail, subject: 'AniSkolar: new message from the Admissions and Scholarship Office', email });
     }
     res.status(201).json({ message: view(result.message) });
   } catch (err) {
@@ -394,7 +403,7 @@ router.post('/office/mine', requireOfficeHead, withUpload, async (req, res) => {
         body: preview(result.message),
         button: { url: appUrl(), label: 'Reply in AniSkolar' },
       });
-      sendMail({ to: process.env.ADSO_NOTIFY_EMAIL, subject: `AniSkolar: new message from ${office}`, ...mail });
+      alertByEmail(result.message, { to: process.env.ADSO_NOTIFY_EMAIL, subject: `AniSkolar: new message from ${office}`, email: mail });
     }
     res.status(201).json({ message: view(result.message) });
   } catch (err) {

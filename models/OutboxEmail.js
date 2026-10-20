@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
-// Personal emails waiting to go out (reminders, digests), sent a few a
-// minute by utils/outbox.js because the email service limits how many it
+// Personal emails waiting to go out (message alerts, reminders, digests),
+// sent a few a minute by utils/outbox.js because the email service limits how many it
 // sends per minute and hour. `key` is unique, so queueing the same
 // reminder twice (e.g. a job that runs again the same week) is a no-op.
 
@@ -14,6 +14,8 @@ const outboxEmailSchema = new mongoose.Schema({
   subject: { type: String, required: true },
   text: { type: String, required: true },
   html: { type: String },
+  // Higher goes first: message alerts (1) before reminders (0).
+  priority: { type: Number, default: 0 },
   status: { type: String, enum: STATUSES, default: 'queued' },
   attempts: { type: Number, default: 0 },
   nextAttemptAt: { type: Date, default: Date.now },
@@ -21,7 +23,7 @@ const outboxEmailSchema = new mongoose.Schema({
   error: String,
 }, { timestamps: true });
 
-outboxEmailSchema.index({ status: 1, nextAttemptAt: 1 });
+outboxEmailSchema.index({ status: 1, priority: -1, nextAttemptAt: 1 });
 // Sent and failed emails are kept 60 days, for the Automation page's counts.
 outboxEmailSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 24 * 3600 });
 

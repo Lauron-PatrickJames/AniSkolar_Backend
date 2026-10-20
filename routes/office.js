@@ -11,7 +11,7 @@ const { findScholarship } = require('../data/scholarships');
 const { summarize, currentTerm, todayInManila, entryHours } = require('../utils/dutyHours');
 const { findHolders, parseEvaluationScores, previousTerm, EVALUATION_ITEMS, PASSING_AVERAGE } = require('../utils/renewals');
 const { norm } = require('../utils/offices');
-const { sendMail } = require('../utils/mailer');
+const { queueEmails, processOutbox } = require('../utils/outbox');
 const { renderEmail } = require('../utils/emailTemplate');
 
 // The office portal: the head of a duty office (listed by the AdSO in Duty
@@ -285,7 +285,10 @@ router.post('/requests', requireOfficeHead, async (req, res) => {
         body: note,
         button: { url: appUrl(), label: 'Open Duty hours → Requests' },
       });
-      sendMail({ to: process.env.ADSO_NOTIFY_EMAIL, subject: `AniSkolar: request from ${req.officeHead.office}`, ...email });
+      // Through the outbox, like message alerts (sent within the email limits).
+      queueEmails([{ key: `office-request:${request._id}`, kind: 'officeRequest', priority: 1, to: process.env.ADSO_NOTIFY_EMAIL, subject: `AniSkolar: request from ${req.officeHead.office}`, ...email }])
+        .then(n => n && processOutbox())
+        .catch(err => console.error('Queueing the request email failed:', err));
     }
     res.status(201).json({ request });
   } catch (err) {
