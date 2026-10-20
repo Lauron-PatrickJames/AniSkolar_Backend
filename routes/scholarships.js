@@ -6,7 +6,7 @@ const { SCHOLARSHIPS, allScholarships, findScholarship } = require('../data/scho
 const { DOCUMENT_KEYS, parseRules } = require('../data/requirementCatalog');
 const customScholarships = require('../utils/customScholarships');
 const { requireAdso } = require('../middleware/requireAdmin');
-const { inSfagApplicationWindow } = require('../utils/academicYear');
+const { inSfagApplicationWindow, sfagOpenAllYear } = require('../utils/academicYear');
 
 // The SFAG takes new applications in June and July only (renewals the rest
 // of the year), so it can only be open then.
@@ -40,7 +40,8 @@ const LIST_MAX_ITEMS = 30;
 router.get('/', async (req, res) => {
   try {
     const settings = await ScholarshipSetting.find({});
-    res.json({ scholarships: settings.map(s => s.toOverrides()) });
+    // sfagOpenAllYear: the June–July SFAG limit is lifted (SFAG_OPEN_ALL_YEAR).
+    res.json({ scholarships: settings.map(s => s.toOverrides()), sfagOpenAllYear: sfagOpenAllYear() });
   } catch (err) {
     console.error('Load scholarship settings error:', err);
     res.status(500).json({ error: 'Failed to load scholarships.' });
