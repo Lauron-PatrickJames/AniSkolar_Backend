@@ -48,9 +48,14 @@ function academicYearStartExpr(dateField = '$createdAt') {
 // renewals only. Within the window the AdSO's Open / Closed status still
 // decides. Mirrors inSfagApplicationWindow() in the frontend's
 // src/utils/eligibility.ts.
+// SFAG_OPEN_ALL_YEAR=true in .env lifts the June–July limit (for demos
+// and testing); the frontend learns it from GET /api/scholarships. Remove
+// it before going live.
+const sfagOpenAllYear = () => process.env.SFAG_OPEN_ALL_YEAR === 'true';
 function inSfagApplicationWindow(date = new Date()) {
+  if (sfagOpenAllYear()) return true;
   const month = Number(new Intl.DateTimeFormat('en-US', { timeZone: TIMEZONE, month: 'numeric' }).format(new Date(date)));
   return month === 6 || month === 7;
 }
 
-module.exports = { ACADEMIC_YEAR_START_MONTH, TIMEZONE, academicYearStart, isReturning, academicYearStartExpr, inSfagApplicationWindow };
+module.exports = { ACADEMIC_YEAR_START_MONTH, TIMEZONE, academicYearStart, isReturning, academicYearStartExpr, inSfagApplicationWindow, sfagOpenAllYear };

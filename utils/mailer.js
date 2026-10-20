@@ -24,8 +24,8 @@ function getClient() {
 const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // Outlook drops CSS line breaks, so each line break becomes <br>.
 const toHtml = text => `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5">${escapeHtml(text).replace(/\r?\n/g, '<br>')}</div>`;
-// Addresses under the reserved .invalid domain (the demo data's sample
-// students) are never emailed.
+// Addresses under the reserved .invalid domain (sample or test records)
+// can't receive mail, so they're skipped.
 const deliverable = address => typeof address === 'string' && !/\.invalid$/i.test(address.trim());
 
 // { to, bcc?, subject, text, wait? } — text is plain; an HTML copy is made

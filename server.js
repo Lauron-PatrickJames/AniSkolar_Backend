@@ -95,7 +95,7 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 // MONGODB_DB (optional) picks another database on the same cluster, e.g.
-// aniskolar_demo filled by scripts/seed-demo.js.
+// one for testing.
 mongoose.connect(process.env.MONGODB_URI, process.env.MONGODB_DB ? { dbName: process.env.MONGODB_DB } : {})
   .then(async () => {
     console.log(`✅ MongoDB Atlas connected (${mongoose.connection.db.databaseName})`);
