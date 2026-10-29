@@ -11,7 +11,8 @@ const { scopedOffice } = require('../utils/officeScope');
 const { findScholarship, acceptsOnlineApplications } = require('../data/scholarships');
 const { findHolders, parseEvaluationScores, previousTerm, PASSING_AVERAGE } = require('../utils/renewals');
 const DutyLog = require('../models/DutyLog');
-const { listOffices, norm } = require('../utils/offices');
+const { listOffices, norm, officesWithHeads } = require('../utils/offices');
+const { summariesFor, stateOf } = require('../utils/evaluations');
 const { sendMail } = require('../utils/mailer');
 const { renderEmail } = require('../utils/emailTemplate');
 const Renewal = require('../models/Renewal');
@@ -147,6 +148,28 @@ function parseSubmission(body, files, period, keptDocTypes = new Set()) {
 
 // --- Scholar ------------------------------------------------------------------
 
+// Renewing waits for the office head's evaluation of the term the renewal
+// looks back on (AdSO, Oct 2026), when the period needs one and the
+// scholar's duty office has a head in AniSkolar. With no office or no head
+// there, the AdSO enters a paper evaluation after submission, so nothing
+// waits. Saying "not continuing" never waits. Returns null, or
+// { office, hoursComplete, message } for the scholar.
+async function evaluationWait(period, studentNumber) {
+  if (!period.requiresEvaluation) return null;
+  const prev = previousTerm(period);
+  const log = await DutyLog.findOne({ studentNumber, academicYear: prev.academicYear, term: prev.term }).lean();
+  if (!log?.officeAssigned || log.evaluation?.average) return null;
+  if (!(await officesWithHeads()).has(norm(log.officeAssigned))) return null;
+  const hoursComplete = stateOf(log, (await summariesFor([log])).get(String(log._id))) !== 'in_progress';
+  return {
+    office: log.officeAssigned,
+    hoursComplete,
+    message: hoursComplete
+      ? `You can renew once ${log.officeAssigned} evaluates your duty for the ${prev.term}. They've been notified.`
+      : `You can renew once your duty hours for the ${prev.term} are complete and ${log.officeAssigned} has evaluated you.`,
+  };
+}
+
 router.get('/mine', requireScholar, async (req, res) => {
   try {
     const [openPeriods, renewals] = await Promise.all([
@@ -161,7 +184,7 @@ router.get('/mine', requireScholar, async (req, res) => {
     for (const period of openPeriods) {
       if (submittedPeriodIds.has(String(period._id))) continue;
       const holders = await findHolders(period, req.studentNumber);
-      if (holders.has(req.studentNumber)) available.push(studentPeriodView(period));
+      if (holders.has(req.studentNumber)) available.push({ ...studentPeriodView(period), evaluationWait: await evaluationWait(period, req.studentNumber) });
     }
 
     const periodIds = renewals.map(r => r.periodId);
@@ -192,6 +215,11 @@ router.post('/', requireScholar, withUploads(async (req, res) => {
     }
     if (await Renewal.exists({ periodId: period._id, studentNumber: req.studentNumber })) {
       return res.status(409).json({ error: 'You already submitted this renewal.' });
+    }
+    // Continuing waits for the office's evaluation (files aren't stored yet).
+    if (boolField(req.body.continuing) === true) {
+      const wait = await evaluationWait(period, req.studentNumber);
+      if (wait) return res.status(409).json({ code: 'evaluation_pending', error: wait.message });
     }
 
     const files = req.files || [];
