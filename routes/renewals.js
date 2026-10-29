@@ -61,11 +61,16 @@ function isObjectId(id) {
   return mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === id;
 }
 
-// The department head's evaluation stays with the office for now (the
-// Scholarship Associate wants Dr. May's go-ahead before scholars see it).
+// Scholars see the department head's evaluation on their renewal (scores,
+// remarks, who and when), without the staff email that entered it.
 function toStudentView(renewal) {
   const obj = renewal.toObject ? renewal.toObject() : { ...renewal };
-  delete obj.evaluation;
+  if (obj.evaluation?.average) {
+    const { enteredBy, source, ...shown } = obj.evaluation;
+    obj.evaluation = shown;
+  } else {
+    delete obj.evaluation;
+  }
   delete obj.reviewedBy;
   obj.history = (obj.history || []).map(({ changedBy, changedByName, ...rest }) => ({
     ...rest,
