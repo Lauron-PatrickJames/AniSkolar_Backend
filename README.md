@@ -65,7 +65,8 @@ node scripts/move-files-to-azure.js --apply --delete-from-mongodb   # then free 
 ## Run
 
 ```bash
-node server.js
+npm run dev      # restarts by itself when a file changes (use this while developing)
+npm start        # plain node server.js, as on Render
 ```
 
 Backend default URL:

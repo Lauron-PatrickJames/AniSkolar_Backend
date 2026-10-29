@@ -27,11 +27,14 @@ const DUTY_START = 8 * 60;
 const LUNCH_START = 12 * 60;
 const LUNCH_END = 13 * 60;
 const MIN_DUTY_MINUTES = 90;
+// Times go in 30-minute steps (on the hour or half hour).
+const STEP_MINUTES = 30;
 function dutyRuleError({ date, timeIn, timeOut }) {
   const day = new Date(`${date}T00:00:00Z`).getUTCDay();
   if (day === 0 || day === 6) return 'Duty is only on weekdays (Monday to Friday).';
   const start = minutes(timeIn);
   const end = minutes(timeOut);
+  if (start % STEP_MINUTES || end % STEP_MINUTES) return 'Use times on the hour or half hour, like 8:00 or 8:30.';
   if (start < DUTY_START) return 'Duty starts at 8:00 AM at the earliest.';
   if (day === 5 && end > 17 * 60) return 'Duty ends by 5:00 PM on Fridays.';
   if (end > 18 * 60) return 'Duty ends by 6:00 PM, Monday to Thursday.';
@@ -84,13 +87,12 @@ function summarize(log, today, { confirmationRequired = false } = {}) {
 }
 
 // Validates a scholar's whole log. Returns { log } or { error }. The
-// office and event credit aren't part of it — the AdSO handles those.
-function parseLog(body) {
+// office, the deadline (set by the AdSO per term) and event credit aren't
+// part of it. `keep`: "date|timeIn|timeOut" of duties already saved, which
+// were checked when they were added and aren't re-checked against rules
+// introduced since (e.g. the 30-minute steps).
+function parseLog(body, { keep = new Set() } = {}) {
   const out = {};
-
-  if (body.deadline === '' || body.deadline === null || body.deadline === undefined) out.deadline = undefined;
-  else if (!isValidDate(body.deadline)) return { error: 'Enter a valid deadline.' };
-  else out.deadline = body.deadline;
 
   if (body.requiredHours === '' || body.requiredHours === null || body.requiredHours === undefined) out.requiredHours = undefined;
   else {
@@ -106,7 +108,7 @@ function parseLog(body) {
     if (!e || !isValidDate(e.date)) return { error: 'Every duty needs a valid date.' };
     if (!TIME_RE.test(e.timeIn || '') || !TIME_RE.test(e.timeOut || '')) return { error: `Enter the time in and time out for ${e.date}.` };
     if (minutes(e.timeOut) <= minutes(e.timeIn)) return { error: `Time out must be after time in (${e.date}).` };
-    const ruleError = dutyRuleError(e);
+    const ruleError = keep.has(`${e.date}|${e.timeIn}|${e.timeOut}`) ? null : dutyRuleError(e);
     if (ruleError) return { error: `${ruleError} (${e.date}, ${e.timeIn}–${e.timeOut})` };
     out.entries.push({ date: e.date, timeIn: e.timeIn, timeOut: e.timeOut });
   }

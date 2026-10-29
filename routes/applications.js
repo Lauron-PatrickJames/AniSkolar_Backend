@@ -38,6 +38,9 @@ const ALLOWED_STATUSES = ['Under Evaluation', 'Approved', 'Rejected', 'Needs Rev
 const MAX_DOCUMENT_FILES = 25;
 const uploadDocs = applicationUpload.array('documents', MAX_DOCUMENT_FILES);
 
+// An SFAG grant percentage from a form field (100 / 75 / 50 / 25), or null.
+const parseGrant = value => ([100, 75, 50, 25].includes(Number(value)) ? Number(value) : null);
+
 // Office-internal fields never leave the server on student-facing routes.
 // Aggregation expression: joins name parts (an array expression) with
 // single spaces, skipping missing or blank parts.
@@ -224,6 +227,11 @@ router.post('/', requireStudent, (req, res) => {
         grantSections = result.sections;
       }
 
+      // SFAG: the grant applied for, checked before any file is stored.
+      if (formType === 'sfag' && !parseGrant(req.body.sfagPercentageRequested)) {
+        return res.status(400).json({ error: 'Choose the grant percentage you’re applying for (100, 75, 50 or 25%).' });
+      }
+
       let documents;
       try {
         documents = await storeFilesInGridFS(req.files, labels, meta);
@@ -251,6 +259,7 @@ router.post('/', requireStudent, (req, res) => {
         if (!personalInfo || !contactSchool || !parentsGuardian || !assetsExpenses || !agreement) {
           return res.status(400).json({ error: 'Missing required SFAG form sections.' });
         }
+        applicationData.sfagPercentageRequested = parseGrant(req.body.sfagPercentageRequested);
         applicationData.personalInfo = JSON.parse(personalInfo);
         applicationData.contactSchool = JSON.parse(contactSchool);
         applicationData.parentsGuardian = JSON.parse(parentsGuardian);
@@ -364,6 +373,11 @@ router.patch('/:id', requireStudent, (req, res) => {
         grantSections = result.sections;
       }
 
+      // SFAG: a changed grant applied for is checked before any file is stored.
+      if (req.body.sfagPercentageRequested !== undefined && !parseGrant(req.body.sfagPercentageRequested)) {
+        return res.status(400).json({ error: 'Choose the grant percentage you’re applying for (100, 75, 50 or 25%).' });
+      }
+
       // Upload any newly-selected replacement files into GridFS, same as POST.
       let newDocs = [];
       try {
@@ -391,6 +405,7 @@ router.patch('/:id', requireStudent, (req, res) => {
       if (isGrant) {
         Object.assign(existing, grantSections);
       } else if (formType === 'sfag') {
+        if (req.body.sfagPercentageRequested !== undefined) existing.sfagPercentageRequested = parseGrant(req.body.sfagPercentageRequested);
         if (personalInfo) existing.personalInfo = JSON.parse(personalInfo);
         if (contactSchool) existing.contactSchool = JSON.parse(contactSchool);
         if (parentsGuardian) existing.parentsGuardian = JSON.parse(parentsGuardian);
@@ -873,6 +888,23 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
           held: names,
           error: `This student already holds the ${names.join(' and the ')}. Only one internally funded scholarship can be credited; if you approve this one, the student chooses which to keep (usually the bigger grant).`,
         });
+      }
+    }
+
+    // Approving an SFAG application (AdSO) sets its grant percentage in the
+    // same step: the one the student applied for, or another the AdSO
+    // picks. It decides the scholar's duty hours.
+    if (status === 'Approved' && application.scholarshipId === SFAG_ID && !office) {
+      const sent = req.body.sfagPercentage === undefined || req.body.sfagPercentage === null || req.body.sfagPercentage === '' ? null : Number(req.body.sfagPercentage);
+      const pct = sent ?? (application.sfagPercentage ? null : application.sfagPercentageRequested ?? null);
+      if (pct === null && !application.sfagPercentage) {
+        return res.status(400).json({ error: 'Choose the grant percentage before approving.' });
+      }
+      if (pct !== null) {
+        if (![100, 75, 50, 25].includes(pct)) return res.status(400).json({ error: 'The grant percentage must be 100, 75, 50 or 25.' });
+        application.sfagPercentage = pct;
+        application.sfagPercentageSetBy = req.adminUser.email || req.adminUser.id;
+        application.sfagPercentageSetAt = new Date();
       }
     }
 

@@ -104,9 +104,11 @@ const applicationSchema = new mongoose.Schema({
 
   adminFields: { type: adminFieldsSchema },
 
-  // SFAG only: the tuition discount granted (100 / 75 / 50 / 25), recorded
-  // by the AdSO once approved. Decides the scholar's duty hours
-  // (models/DutySetting.js). Students see their own.
+  // SFAG only: the tuition discount the student applies for (chosen on the
+  // form), and the one granted (100 / 75 / 50 / 25). The AdSO approves the
+  // requested one or changes it; the granted one decides the scholar's duty
+  // hours (models/DutySetting.js). Students see their own.
+  sfagPercentageRequested: { type: Number, enum: [100, 75, 50, 25] },
   sfagPercentage: { type: Number, enum: [100, 75, 50, 25] },
   sfagPercentageSetBy: String,
   sfagPercentageSetAt: Date,
@@ -115,7 +117,9 @@ const applicationSchema = new mongoose.Schema({
   // POLCA): the office records when an approved scholar graduated or
   // stopped, which ends the scholarship and frees its slot.
   endedAt: Date,
-  endReason: { type: String, enum: ['Graduated', 'Stopped'] },
+  // 'Declined': the student had two scholarships approved and kept the
+  // other one (POST /api/students/me/holdings/choose).
+  endReason: { type: String, enum: ['Graduated', 'Stopped', 'Declined'] },
   endedBy: String,
 
   // Set when a POLCA / Alumni office approves the application, which sends

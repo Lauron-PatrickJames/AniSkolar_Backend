@@ -40,6 +40,8 @@ const { summarize, parseLog, currentTerm, todayInManila, isValidDate } = require
 //   PUT /api/duty-hours/admin/claims               { studentNumber, eventId, status: Approved|Rejected, note }
 //   PUT /api/duty-hours/admin/office-slots         { officeSlots: [{ office, slots }] } — how many
 //                                                  scholars each office takes (for Random assign)
+//   PUT /api/duty-hours/admin/deadline             { academicYear, term, deadline } the term's duty
+//                                                  deadline ('' = none); copied onto every log of the term
 //   PUT /api/duty-hours/admin/office               assign the office one or more scholars render
 //                                                  duty in for a term ({ academicYear, term,
 //                                                  studentNumbers, officeAssigned }; '' = unassign)
@@ -140,10 +142,11 @@ function logView(log, today, rule, eventsById = new Map(), headOffices = new Set
   };
 }
 
-// The scholar's copy leaves out who assigned the office.
+// The scholar's copy leaves out who assigned the office, and of the
+// evaluation only whether it's done (not the scores).
 function scholarLogView(log, today, rule, eventsById, headOffices) {
   const { officeAssignedBy, evaluation, ...rest } = log;
-  return logView(rest, today, rule, eventsById, headOffices);
+  return { ...logView(rest, today, rule, eventsById, headOffices), evaluated: !!evaluation?.average };
 }
 
 router.get('/mine', requireSfagScholar, async (req, res) => {
@@ -156,7 +159,7 @@ router.get('/mine', requireSfagScholar, async (req, res) => {
       dutyRules([req.studentNumber]),
       termEvents(term),
     ]);
-    const empty = { ...term, studentNumber: req.studentNumber, entries: [], specialEvents: [], eventClaims: [] };
+    const empty = { ...term, studentNumber: req.studentNumber, entries: [], specialEvents: [], eventClaims: [], deadline: (await DutySetting.deadlineFor(term)) ?? undefined };
     res.json({
       current: currentTerm(),
       terms: others.map(({ academicYear, term: t }) => ({ academicYear, term: t })),
@@ -175,16 +178,23 @@ router.put('/mine', requireSfagScholar, async (req, res) => {
     const body = req.body || {};
     const { value: term, error: termError } = parseTerm({ academicYear: body.academicYear, term: body.term });
     if (termError) return res.status(400).json({ error: termError });
-    const { log, error } = parseLog(body);
-    if (error) return res.status(400).json({ error });
-    // Hours set by the AdSO for the scholar's percentage aren't theirs to change.
-    const rule = (await dutyRules([req.studentNumber])).get(req.studentNumber);
-    if (rule?.requiredHours != null) delete log.requiredHours;
     // A duty the office head already confirmed or flagged keeps that (and
     // its id) as long as its date and times are unchanged; a new or edited
     // duty waits for the head again.
-    const existing = await DutyLog.findOne({ studentNumber: req.studentNumber, ...term }).select('entries').lean();
+    const existing = await DutyLog.findOne({ studentNumber: req.studentNumber, ...term }).select('entries officeAssigned').lean();
     const before = new Map((existing?.entries || []).map(e => [`${e.date}|${e.timeIn}|${e.timeOut}`, e]));
+    const { log, error } = parseLog(body, { keep: new Set(before.keys()) });
+    if (error) return res.status(400).json({ error });
+    // Duty is rendered in the office the AdSO assigns: no new duties before
+    // that (removing old ones is fine; event claims are separate).
+    if (!existing?.officeAssigned && log.entries.some(e => !before.has(`${e.date}|${e.timeIn}|${e.timeOut}`))) {
+      return res.status(409).json({ error: 'You can log duties once the scholarship office assigns your office.' });
+    }
+    // Hours set by the AdSO for the scholar's percentage aren't theirs to change.
+    const rule = (await dutyRules([req.studentNumber])).get(req.studentNumber);
+    if (rule?.requiredHours != null) delete log.requiredHours;
+    // The deadline is the AdSO's for the term.
+    log.deadline = (await DutySetting.deadlineFor(term)) ?? undefined;
     log.entries = log.entries.map(e => {
       const old = before.get(`${e.date}|${e.timeIn}|${e.timeOut}`);
       if (!old) return e;
@@ -257,6 +267,8 @@ router.get('/admin', requireAdso, async (req, res) => {
     res.json({
       term,
       current: currentTerm(),
+      // The AdSO's duty deadline for this term (YYYY-MM-DD) or null.
+      deadline: await DutySetting.deadlineFor(term),
       scholars,
       // Offices used in any term, for suggestions when assigning.
       offices: offices.filter(Boolean).sort((a, b) => a.localeCompare(b)),
@@ -370,6 +382,25 @@ router.patch('/admin/requests/:id', requireAdso, async (req, res) => {
   }
 });
 
+router.put('/admin/deadline', requireAdso, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const { value: term, error } = parseTerm({ academicYear: body.academicYear, term: body.term });
+    if (error) return res.status(400).json({ error });
+    const deadline = typeof body.deadline === 'string' ? body.deadline.trim() : '';
+    if (deadline && !isValidDate(deadline)) return res.status(400).json({ error: 'Choose a valid date.' });
+    const setting = await DutySetting.findById('duty').select('deadlines').lean();
+    const others = (setting?.deadlines ?? []).filter(d => !(d.academicYear === term.academicYear && d.term === term.term));
+    const deadlines = deadline ? [...others, { ...term, date: deadline }] : others;
+    await DutySetting.findByIdAndUpdate('duty', { $set: { deadlines, updatedBy: req.adminUser.email || req.adminUser.id } }, { upsert: true, runValidators: true });
+    await DutyLog.updateMany(term, deadline ? { $set: { deadline } } : { $unset: { deadline: '' } });
+    res.json({ term, deadline: deadline || null });
+  } catch (err) {
+    console.error('Set duty deadline error:', err);
+    res.status(500).json({ error: 'Failed to save the deadline.' });
+  }
+});
+
 router.put('/admin/office', requireAdso, async (req, res) => {
   try {
     const body = req.body || {};
@@ -397,10 +428,11 @@ router.put('/admin/office', requireAdso, async (req, res) => {
       return res.status(400).json({ error: `Not an SFAG scholar for this term: ${unknown.slice(0, 5).join(', ')}${unknown.length > 5 ? '…' : ''}.` });
     }
 
+    const termDeadline = await DutySetting.deadlineFor(term);
     const update = office
       ? {
           $set: { officeAssigned: office, officeAssignedBy: req.adminUser.email || req.adminUser.id, officeAssignedAt: new Date() },
-          $setOnInsert: { entries: [], specialEvents: [] },
+          $setOnInsert: { entries: [], specialEvents: [], ...(termDeadline ? { deadline: termDeadline } : {}) },
         }
       : { $unset: { officeAssigned: '', officeAssignedBy: '', officeAssignedAt: '' } };
     // Assigning creates the scholar's log for the term if they haven't
@@ -442,9 +474,10 @@ router.post('/mine/claims', requireSfagScholar, async (req, res) => {
     if (event.date > todayInManila()) return res.status(400).json({ error: 'You can claim an event once it has taken place.' });
     const term = { academicYear: event.academicYear, term: event.term };
     // One claim per event; the filter makes a double tap a no-op.
+    const termDeadline = await DutySetting.deadlineFor(term);
     const updated = await DutyLog.findOneAndUpdate(
       { studentNumber: req.studentNumber, ...term, 'eventClaims.event': { $ne: event._id } },
-      { $push: { eventClaims: { event: event._id, status: 'Pending', claimedAt: new Date() } }, $setOnInsert: { entries: [], specialEvents: [] } },
+      { $push: { eventClaims: { event: event._id, status: 'Pending', claimedAt: new Date() } }, $setOnInsert: { entries: [], specialEvents: [], ...(termDeadline ? { deadline: termDeadline } : {}) } },
       { upsert: true, returnDocument: 'after', runValidators: true, setDefaultsOnInsert: true }
     ).lean().catch(err => (err.code === 11000 ? null : Promise.reject(err)));
     if (!updated) return res.status(409).json({ error: 'You already claimed this event.' });
@@ -587,6 +620,8 @@ router.put('/admin/claims', requireAdso, async (req, res) => {
       { returnDocument: 'after' }
     ).lean();
     if (!updated) return res.status(404).json({ error: "This scholar hasn't claimed this event." });
+    // Event credit can complete the hours: tell the office head.
+    if (status === 'Approved') require('../utils/evaluations').notifyIfReady(updated._id);
     res.json({ studentNumber: updated.studentNumber, eventId, status });
   } catch (err) {
     console.error('Review event claim error:', err);
