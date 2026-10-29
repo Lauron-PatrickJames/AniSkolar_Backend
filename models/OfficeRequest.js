@@ -12,7 +12,8 @@ const officeRequestSchema = new mongoose.Schema({
   headEmail: String,
   headName: String,
   kind: { type: String, enum: KINDS, required: true },
-  scholar: { type: String, trim: true, maxlength: 200 },   // name or student number, for 'specific'
+  scholar: { type: String, trim: true, maxlength: 200 },   // 'Name (student number)', for 'specific'
+  studentNumber: { type: String, trim: true },             // the scholar picked, for 'specific'
   count: { type: Number, min: 1, max: 20 },                // for 'more' / 'fewer'
   note: { type: String, trim: true, maxlength: 1000 },
   academicYear: Number,
