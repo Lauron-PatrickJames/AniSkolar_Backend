@@ -104,6 +104,13 @@ async function findOfficeLog(req, term) {
   return log ?? null;
 }
 
+// Toward the requirement: confirmed hours plus approved event credit, and
+// the hours the AdSO requires (null when not set).
+async function progressOf(log) {
+  const s = (await summariesFor([log])).get(String(log._id));
+  return { completed: s?.completed ?? 0, required: s?.required ?? null };
+}
+
 router.get('/scholars/:studentNumber', requireOfficeHead, async (req, res) => {
   try {
     const { value: term, error } = parseTerm(req.query);
@@ -117,6 +124,7 @@ router.get('/scholars/:studentNumber', requireOfficeHead, async (req, res) => {
       student: s,
       entries: [...log.entries].sort((a, b) => (a.date + a.timeIn).localeCompare(b.date + b.timeIn)).map(entryView),
       summary: summarize(log, todayInManila(), { confirmationRequired: true }),
+      progress: await progressOf(log),
     });
   } catch (err) {
     console.error('Office scholar log error:', err);
@@ -164,6 +172,7 @@ router.patch('/scholars/:studentNumber/entries', requireOfficeHead, async (req, 
     res.json({
       entries: [...updated.entries].sort((a, b) => (a.date + a.timeIn).localeCompare(b.date + b.timeIn)).map(entryView),
       summary: summarize(updated, todayInManila(), { confirmationRequired: true }),
+      progress: await progressOf(updated),
     });
   } catch (err) {
     console.error('Confirm duties error:', err);
