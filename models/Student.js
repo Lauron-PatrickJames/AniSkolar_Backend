@@ -3,6 +3,10 @@ const mongoose = require('mongoose');
 const CIVIL_STATUS_OPTIONS = ['Single', 'Married', 'Widowed', 'Separated', 'Divorced'];
 const GUARDIAN_TYPES = ['father', 'mother', 'other'];
 const VERIFICATION_GROUPS = ['program', 'enrollment', 'gpa'];
+// Correction requests can also be about identity details, which students
+// can't change after sign-up (routes/students.js LOCKED_FIELDS).
+const CORRECTION_GROUPS = [...VERIFICATION_GROUPS, 'personal'];
+const NAME_SUFFIXES = ['Jr.', 'Sr.', 'II', 'III', 'IV', 'V'];
 
 // Set when an office verifies a group of academic details; absent means
 // self-reported.
@@ -15,7 +19,7 @@ const verificationSchema = new mongoose.Schema({
 
 // A student asking the office to correct a verified group.
 const correctionRequestSchema = new mongoose.Schema({
-    group: { type: String, enum: VERIFICATION_GROUPS, required: true },
+    group: { type: String, enum: CORRECTION_GROUPS, required: true },
     message: { type: String, trim: true, maxlength: 1000, required: true },
     status: { type: String, enum: ['open', 'resolved'], default: 'open' },
     createdAt: { type: Date, default: Date.now },
@@ -38,6 +42,10 @@ const studentSchema = new mongoose.Schema({
     // Clerk in the meantime).
     firstName: { type: String, trim: true },
     middleName: { type: String, trim: true },
+    // When the student confirmed their details at sign-up (identity
+    // details are locked from then on).
+    profileConfirmedAt: Date,
+    nameSuffix: { type: String, enum: [...NAME_SUFFIXES, ''] },
     lastName: { type: String, trim: true },
     // Course name and college are taken from the program list
     // (data/programs.js) by programCode; students pick the program only.
@@ -76,8 +84,10 @@ const studentSchema = new mongoose.Schema({
     // --- Parents / Guardian Information ---
     fatherName: String,
     fatherContactNo: String,
+    fatherDeceased: Boolean,
     motherName: String,
     motherContactNo: String,
+    motherDeceased: Boolean,
     // Who the guardian is. 'father' / 'mother' copy that parent into the
     // guardian fields below on save, so readers of guardianName etc. (the
     // application forms) keep working; 'other' is someone else.
@@ -128,3 +138,5 @@ module.exports = mongoose.model('Student', studentSchema);
 module.exports.CIVIL_STATUS_OPTIONS = CIVIL_STATUS_OPTIONS;
 module.exports.GUARDIAN_TYPES = GUARDIAN_TYPES;
 module.exports.VERIFICATION_GROUPS = VERIFICATION_GROUPS;
+module.exports.CORRECTION_GROUPS = CORRECTION_GROUPS;
+module.exports.NAME_SUFFIXES = NAME_SUFFIXES;

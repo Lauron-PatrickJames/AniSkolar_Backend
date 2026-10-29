@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { getAuth, clerkClient } = require('@clerk/express');
 const Student = require('../models/Student');
+const Message = require('../models/Message');
+const Application = require('../models/Application');
 const { findProgram, YEAR_LEVELS } = require('../data/programs');
 const { requireAdso } = require('../middleware/requireAdmin');
 const { requireStudent } = require('../middleware/requireStudent');
@@ -26,13 +28,13 @@ function validStudentNumber(value) {
 // tied to Clerk/verification, not editable profile data. Course and
 // college aren't either: they follow from programCode (data/programs.js).
 const EDITABLE_FIELDS = [
-  // The middle name is the student's to enter; first/last come from Clerk.
-  'middleName',
+  // The middle name and suffix are the student's to enter; first/last come from Clerk.
+  'middleName', 'nameSuffix',
   'programCode', 'yearLevel', 'section', 'gpa',
   'dateOfBirth', 'nationality', 'placeOfBirth', 'civilStatus',
   'homeAddress', 'cityMunicipality', 'province', 'zipCode', 'country',
   'telephoneNumber', 'mobileNumber',
-  'fatherName', 'fatherContactNo', 'motherName', 'motherContactNo',
+  'fatherName', 'fatherContactNo', 'fatherDeceased', 'motherName', 'motherContactNo', 'motherDeceased',
   'guardianType', 'guardianName', 'guardianRelationship', 'guardianAddress', 'guardianAddressSameAsHome', 'guardianContactNo',
 ];
 
@@ -42,7 +44,37 @@ const GROUP_FIELDS = {
   enrollment: ['yearLevel', 'section'],
   gpa: ['gpa'],
 };
-const GROUP_LABELS = { program: 'Program', enrollment: 'Year level and section', gpa: 'GPA' };
+const GROUP_LABELS = { program: 'Program', enrollment: 'Year level and section', gpa: 'GPA', personal: 'Personal details' };
+
+// Set once at sign-up; afterwards only the AdSO can change them (the
+// student agrees to this on the sign-up review step and asks for changes
+// with a "personal" correction request).
+const LOCKED_FIELDS = ['middleName', 'nameSuffix', 'dateOfBirth', 'placeOfBirth', 'nationality', 'civilStatus', 'programCode'];
+
+// Required at sign-up: everything except the telephone and suffix, a 1st
+// year's GPA, a deceased parent's contact, and the guardian's details when
+// the guardian is a parent. Mirrors validateDraft() in the frontend's
+// components/profile/profileForm.ts. Returns a message or null.
+const REQUIRED_LABELS = {
+  programCode: 'program', yearLevel: 'year level', section: 'section', middleName: 'middle name',
+  dateOfBirth: 'date of birth', placeOfBirth: 'place of birth', nationality: 'nationality', civilStatus: 'civil status',
+  mobileNumber: 'mobile number', homeAddress: 'street address', province: 'province', cityMunicipality: 'city or municipality',
+  zipCode: 'ZIP code', fatherName: "father's name", motherName: "mother's name", guardianType: 'guardian',
+};
+function missingRequired(data) {
+  const blank = f => data[f] === undefined || data[f] === null || data[f] === '';
+  const missing = Object.keys(REQUIRED_LABELS).filter(blank);
+  if (data.yearLevel !== '1st Year' && blank('gpa')) missing.push('gpa');
+  if (!data.fatherDeceased && blank('fatherContactNo')) missing.push('fatherContactNo');
+  if (!data.motherDeceased && blank('motherContactNo')) missing.push('motherContactNo');
+  if (data.guardianType === 'other') {
+    for (const f of ['guardianName', 'guardianRelationship', 'guardianContactNo']) if (blank(f)) missing.push(f);
+    if (!data.guardianAddressSameAsHome && blank('guardianAddress')) missing.push('guardianAddress');
+  }
+  if (!missing.length) return null;
+  const labels = { gpa: 'GPA', fatherContactNo: "father's contact number", motherContactNo: "mother's contact number", guardianName: "guardian's name", guardianRelationship: "guardian's relationship", guardianContactNo: "guardian's contact number", guardianAddress: "guardian's address", ...REQUIRED_LABELS };
+  return `Please fill in: ${missing.map(f => labels[f]).join(', ')}.`;
+}
 
 const TEXT_LIMIT = 200;
 
@@ -146,6 +178,17 @@ function sanitizeProfileFields(body) {
   }
   if (data.guardianType === '') data.guardianType = undefined;
   if (data.guardianAddressSameAsHome !== undefined) data.guardianAddressSameAsHome = data.guardianAddressSameAsHome === true;
+  for (const f of ['fatherDeceased', 'motherDeceased']) {
+    if (data[f] !== undefined) data[f] = data[f] === true;
+    if (data[f]) data[f.replace('Deceased', 'ContactNo')] = undefined;
+  }
+  if (data.nameSuffix !== undefined && data.nameSuffix !== '' && !Student.NAME_SUFFIXES.includes(data.nameSuffix)) {
+    return { error: 'Choose a name suffix from the list.' };
+  }
+  if (data.nameSuffix === '') data.nameSuffix = undefined;
+  if ((data.guardianType === 'father' && data.fatherDeceased) || (data.guardianType === 'mother' && data.motherDeceased)) {
+    return { error: 'A deceased parent can’t be your guardian. Choose another guardian.' };
+  }
 
   return { data };
 }
@@ -191,8 +234,21 @@ function nameParts(clerkUser) {
   };
 }
 
-function fullName({ firstName, middleName, lastName }) {
-  return [firstName, middleName, lastName].map(p => (p || '').trim()).filter(Boolean).join(' ');
+function fullName({ firstName, middleName, lastName, nameSuffix }) {
+  return [firstName, middleName, lastName, nameSuffix].map(p => (p || '').trim()).filter(Boolean).join(' ');
+}
+
+// Identity details a student tries to change after sign-up. Returns a
+// message or null.
+function lockedChangeError(student, data) {
+  const same = (f, before, after) => {
+    if (f === 'dateOfBirth') return (before ? new Date(before).toISOString().slice(0, 10) : '') === (after ? new Date(after).toISOString().slice(0, 10) : '');
+    return String(before ?? '').trim().toLowerCase() === String(after ?? '').trim().toLowerCase();
+  };
+  // Filling in a detail that was never set (older accounts) is allowed.
+  const changed = LOCKED_FIELDS.filter(f => f in data && String(student[f] ?? '').trim() && !same(f, student[f], data[f]));
+  if (!changed.length) return null;
+  return 'Your name, birth details, nationality, civil status and program can only be changed by the Admissions and Scholarship Office. Use “Request a change” on your Profile.';
 }
 
 // GET /api/students/me
@@ -238,7 +294,9 @@ router.get('/me', async (req, res) => {
 // GET /api/students/me/holdings — scholarships the signed-in student holds
 // now, whether one of them rules out applying for others (SFAG), and the
 // scholarships whose slots for the student's college are full (POLCA):
-// { held, exclusive, slotsFull: [{ scholarshipId, message }] }.
+// { held, exclusive, slotsFull: [{ scholarshipId, message }], details }.
+// details: per held scholarship, the approved application behind it
+// (reference, approval date, SFAG grant percentage) for My Scholarship.
 router.get('/me/holdings', requireStudent, async (req, res) => {
   try {
     const held = await findHeldScholarships(req.studentNumber);
@@ -249,10 +307,46 @@ router.get('/me/holdings', requireStudent, async (req, res) => {
       const full = await scholarSlotsFull(scholarship, req.studentNumber);
       if (full) slotsFull.push({ scholarshipId: scholarship.id, message: full.message });
     }
-    res.json({ held, exclusive, slotsFull });
+    const apps = await Application.find({ studentNumber: req.studentNumber, status: 'Approved', endedAt: null, scholarshipId: { $in: held.map(h => h.scholarshipId) } })
+      .select('scholarshipId referenceCode reviewedAt createdAt sfagPercentage office').sort({ reviewedAt: -1, createdAt: -1 }).lean();
+    const details = held.map(h => {
+      const a = apps.find(x => x.scholarshipId === h.scholarshipId);
+      return { scholarshipId: h.scholarshipId, applicationId: a ? String(a._id) : null, referenceCode: a?.referenceCode ?? null, approvedAt: a?.reviewedAt ?? a?.createdAt ?? null, grantPercentage: a?.sfagPercentage ?? null };
+    });
+    res.json({ held, exclusive, slotsFull, details });
   } catch (err) {
     console.error('Fetch holdings error:', err);
     res.status(500).json({ error: 'Failed to load your scholarships.' });
+  }
+});
+
+// POST /api/students/me/holdings/choose  { keepScholarshipId }
+// Two (or more) scholarships approved at once: only one internally funded
+// scholarship can be credited, so the student keeps one. The others' approved
+// applications end as 'Declined' (by the student), which frees their slots,
+// and the AdSO gets a message about it.
+router.post('/me/holdings/choose', requireStudent, async (req, res) => {
+  try {
+    const keep = typeof req.body?.keepScholarshipId === 'string' ? req.body.keepScholarshipId : '';
+    const held = await findHeldScholarships(req.studentNumber);
+    if (held.length < 2) return res.status(409).json({ error: 'You only hold one scholarship, so there’s nothing to choose.' });
+    const kept = held.find(h => h.scholarshipId === keep);
+    if (!kept) return res.status(400).json({ error: 'Choose one of the scholarships you were approved for.' });
+    const declined = held.filter(h => h.scholarshipId !== keep);
+    const now = new Date();
+    await Application.updateMany(
+      { studentNumber: req.studentNumber, status: 'Approved', endedAt: null, scholarshipId: { $in: declined.map(d => d.scholarshipId) } },
+      { $set: { endedAt: now, endReason: 'Declined', endedBy: 'student' } }
+    );
+    const student = await Student.findOne({ studentNumber: req.studentNumber }).select('studentNumber email name').lean();
+    await Message.create({
+      studentNumber: req.studentNumber, from: 'student', authorEmail: student?.email, authorName: student?.name,
+      body: `I was approved for more than one scholarship. I’m keeping the ${kept.scholarshipName} and declining the ${declined.map(d => d.scholarshipName).join(' and the ')}.`,
+    }).catch(err => console.error('Choice message failed:', err));
+    res.json({ kept: kept.scholarshipId, declined: declined.map(d => d.scholarshipId) });
+  } catch (err) {
+    console.error('Choose scholarship error:', err);
+    res.status(500).json({ error: 'Failed to save your choice.' });
   }
 });
 
@@ -303,11 +397,17 @@ router.post('/complete-profile', async (req, res) => {
     if (error) {
       return res.status(400).json({ error });
     }
+    const missing = missingRequired(data);
+    if (missing) return res.status(400).json({ error: missing });
+    if (req.body.agreed !== true) {
+      return res.status(400).json({ error: 'Confirm that your details are true and complete before you finish.' });
+    }
 
-    const names = { ...nameParts(clerkUser), middleName: data.middleName || undefined };
+    const names = { ...nameParts(clerkUser), middleName: data.middleName || undefined, nameSuffix: data.nameSuffix };
     const student = new Student({
       clerkId: userId,
       studentNumber,
+      profileConfirmedAt: new Date(),
       ...names,
       name: fullName(names) || 'Student',
       email: primaryEmail.toLowerCase(),
@@ -344,18 +444,13 @@ router.patch('/me', async (req, res) => {
     if (error) {
       return res.status(400).json({ error });
     }
-    const lockedError = verifiedChangeError(student, data);
+    const lockedError = verifiedChangeError(student, data) || lockedChangeError(student, data);
     if (lockedError) {
       return res.status(409).json({ error: lockedError });
     }
 
     Object.assign(student, data);
     applyGuardianLinks(student);
-    // A changed middle name updates the full name, as long as the record
-    // has its first/last parts (older records keep their name until backfilled).
-    if (data.middleName !== undefined && (student.firstName || student.lastName)) {
-      student.name = fullName(student) || student.name;
-    }
 
     // Keep the avatar synced with whatever Clerk/Microsoft currently has
     // on file — a no-op fetch cost if it hasn't changed, but means a
@@ -392,7 +487,7 @@ router.post('/me/correction-requests', async (req, res) => {
 
     const group = req.body?.group;
     const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
-    if (!GROUP_FIELDS[group]) return res.status(400).json({ error: 'Choose what needs correcting.' });
+    if (!GROUP_LABELS[group]) return res.status(400).json({ error: 'Choose what needs correcting.' });
     if (!message) return res.status(400).json({ error: 'Tell the office what should be corrected.' });
     if (message.length > 1000) return res.status(400).json({ error: 'Keep the request under 1000 characters.' });
     if (student.correctionRequests.some(r => r.group === group && r.status === 'open')) {
@@ -401,6 +496,12 @@ router.post('/me/correction-requests', async (req, res) => {
 
     student.correctionRequests.push({ group, message });
     await student.save();
+    // Also a message in the student's conversation, so the AdSO sees it in
+    // Messages and can reply there.
+    await Message.create({
+      studentNumber: student.studentNumber, from: 'student', authorEmail: student.email, authorName: student.name,
+      body: `Correction request (${GROUP_LABELS[group]}):\n${message}`,
+    }).catch(err => console.error('Correction request message failed:', err));
     res.status(201).json({ student });
   } catch (err) {
     console.error('Correction request error:', err);
@@ -412,6 +513,44 @@ router.post('/me/correction-requests', async (req, res) => {
 // AdSO only: marks a group of a student's academic details as verified
 // (locking it from student edits) or back to self-reported. Verifying
 // resolves any open correction request for that group.
+// GET /api/students/:studentNumber/profile — AdSO only: the full profile
+// (with open correction requests), for editing it on a student's request.
+router.get('/:studentNumber/profile', requireAdso, async (req, res) => {
+  try {
+    const student = await Student.findOne({ studentNumber: String(req.params.studentNumber) }).lean();
+    if (!student) return res.status(404).json({ error: 'This student hasn’t set up a profile yet.' });
+    res.json({ student });
+  } catch (err) {
+    console.error('Admin profile load error:', err);
+    res.status(500).json({ error: 'Failed to load the profile.' });
+  }
+});
+
+// PATCH /api/students/:studentNumber/profile — AdSO only: edits a student's
+// profile, including the details students can't change after sign-up
+// (name parts, birth details, program, …). Resolves open correction
+// requests for what was changed.
+router.patch('/:studentNumber/profile', requireAdso, async (req, res) => {
+  try {
+    const student = await Student.findOne({ studentNumber: req.params.studentNumber });
+    if (!student) return res.status(404).json({ error: 'Student not found.' });
+    const { data, error } = sanitizeProfileFields(req.body);
+    if (error) return res.status(400).json({ error });
+    Object.assign(student, data);
+    applyGuardianLinks(student);
+    if (student.firstName || student.lastName) student.name = fullName(student) || student.name;
+    const now = new Date();
+    for (const r of student.correctionRequests) {
+      if (r.status === 'open') { r.status = 'resolved'; r.resolvedAt = now; r.resolvedBy = req.adminUser.email; }
+    }
+    await student.save();
+    res.json({ student });
+  } catch (err) {
+    console.error('Admin profile update error:', err);
+    res.status(500).json({ error: 'Failed to update the profile.' });
+  }
+});
+
 router.patch('/:studentNumber/verification', requireAdso, async (req, res) => {
   try {
     const { group, verified } = req.body || {};
