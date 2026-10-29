@@ -39,6 +39,13 @@ const officeSlotSchema = new mongoose.Schema({
   headEmail: { type: String, trim: true, lowercase: true, maxlength: 200 },
 }, { _id: false });
 
+// The duty deadline for a term, set by the AdSO (scholars can't change it).
+const termDeadlineSchema = new mongoose.Schema({
+  academicYear: { type: Number, required: true },
+  term: { type: String, required: true },
+  date: { type: String, required: true },   // YYYY-MM-DD
+}, { _id: false });
+
 const dutySettingSchema = new mongoose.Schema({
   _id: { type: String, default: 'duty' },
   // lower / upper -> p100 / p75 / p50 / p25 -> hours per term
@@ -48,6 +55,7 @@ const dutySettingSchema = new mongoose.Schema({
   // office slots alone mustn't blank them).
   hoursSaved: Boolean,
   officeSlots: { type: [officeSlotSchema], default: undefined },
+  deadlines: { type: [termDeadlineSchema], default: undefined },
   updatedBy: String,
 }, { timestamps: true });
 
@@ -61,7 +69,13 @@ dutySettingSchema.statics.current = async function current() {
     g,
     Object.fromEntries(GRANT_PERCENTAGES.map(p => [p, saved[g]?.[key(p)] ?? null])),
   ]));
-  return { hoursByGroup, officeSlots: doc?.officeSlots ?? [], updatedBy: doc?.updatedBy ?? null, updatedAt: doc?.updatedAt ?? null };
+  return { hoursByGroup, officeSlots: doc?.officeSlots ?? [], deadlines: doc?.deadlines ?? [], updatedBy: doc?.updatedBy ?? null, updatedAt: doc?.updatedAt ?? null };
+};
+
+// The AdSO's duty deadline for a term (YYYY-MM-DD), or null.
+dutySettingSchema.statics.deadlineFor = async function deadlineFor({ academicYear, term }) {
+  const doc = await this.findById('duty').select('deadlines').lean();
+  return doc?.deadlines?.find(d => d.academicYear === academicYear && d.term === term)?.date ?? null;
 };
 
 module.exports = mongoose.model('DutySetting', dutySettingSchema);

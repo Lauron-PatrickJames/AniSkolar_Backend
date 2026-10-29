@@ -227,11 +227,22 @@ router.post('/', requireAdso, async (req, res) => {
   try {
     const parsed = parseCustomFields(req.body || {});
     if (parsed.error) return res.status(400).json({ error: parsed.error });
+    // What students see, filled in at creation (all editable later).
+    const body = req.body || {};
+    const info = {};
+    if (typeof body.description === 'string' && body.description.trim()) info.description = body.description.trim().slice(0, TEXT_LIMITS.description);
+    if (typeof body.deadline === 'string' && body.deadline.trim()) info.deadline = body.deadline.trim().slice(0, TEXT_LIMITS.deadline);
+    if (Array.isArray(body.benefits)) {
+      const benefits = body.benefits.filter(b => typeof b === 'string').map(b => b.trim()).filter(Boolean);
+      if (benefits.length > 10 || benefits.some(b => b.length > 300)) return res.status(400).json({ error: 'Use at most 10 benefits of 300 characters each.' });
+      if (benefits.length) info.benefits = benefits;
+    }
     const slug = parsed.value.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'scholarship';
     const scholarshipId = `c-${slug}-${Math.random().toString(36).slice(2, 6)}`;
     const saved = await ScholarshipSetting.create({
       scholarshipId,
       ...parsed.value,
+      ...info,
       custom: true,
       // New scholarships start closed, with nothing required yet.
       status: 'Closed',

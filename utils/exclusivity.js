@@ -48,6 +48,8 @@ async function findHeldScholarships(studentNumber, { excludeApplicationId, now =
     }
     if (academicYearStart(a.createdAt) < fromYear) continue;
     consider(a.scholarshipId, a.scholarshipName, approvedAt, true);
+    // Ended (graduated, stopped, or declined for another scholarship).
+    if (a.endedAt) consider(a.scholarshipId, a.scholarshipName, new Date(a.endedAt), false);
   }
   for (const r of renewals) {
     consider(r.scholarshipId, r.scholarshipName, new Date(r.updatedAt), r.status === 'Renewed');

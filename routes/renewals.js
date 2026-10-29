@@ -1,4 +1,5 @@
 const express = require('express');
+const { RENEWAL_DOCUMENTS } = require('../models/RenewalPeriod');
 const router = express.Router();
 const multer = require('multer');
 const mongoose = require('mongoose');
@@ -76,6 +77,8 @@ function periodView(period) {
   const scholarship = findScholarship(period.scholarshipId);
   return {
     ...(period.toObject ? period.toObject() : period),
+    // Grades only, for every period.
+    requirements: RENEWAL_DOCUMENTS,
     scholarshipName: scholarship?.name ?? period.scholarshipId,
     office: scholarship?.office ?? 'LSO',
   };
@@ -130,8 +133,8 @@ function parseSubmission(body, files, period, keptDocTypes = new Set()) {
   const hasFailingGrade = boolField(body.hasFailingGrade);
   if (hasFailingGrade === undefined) return { error: 'Tell us whether you had any failing grade last semester.' };
 
-  const requirements = period.requirements || [];
-  if (labels.some(l => !requirements.includes(l))) return { error: 'One of the documents is not a requirement for this renewal.' };
+  const requirements = RENEWAL_DOCUMENTS;
+  if (labels.some(l => !requirements.includes(l))) return { error: 'Only your grades are submitted for a renewal.' };
   const present = new Set([...keptDocTypes, ...labels]);
   const missing = requirements.filter(r => !present.has(r));
   if (missing.length) return { error: `Please upload all required documents. Missing: ${missing.join(', ')}.` };
@@ -272,14 +275,7 @@ function parsePeriodBody(body, { partial }) {
     }
   }
   if (body.requiresEvaluation !== undefined) out.requiresEvaluation = body.requiresEvaluation === true;
-  if (body.requirements !== undefined) {
-    if (!Array.isArray(body.requirements) || body.requirements.some(r => typeof r !== 'string')) {
-      return { error: 'Requirements must be a list of document names.' };
-    }
-    const items = [...new Set(body.requirements.map(r => r.trim()).filter(Boolean))];
-    if (items.length > 10 || items.some(r => r.length > 200)) return { error: 'Use at most 10 requirements of 200 characters.' };
-    out.requirements = items;
-  }
+  // The documents aren't chosen per period: renewal is grades only.
   return { period: out };
 }
 

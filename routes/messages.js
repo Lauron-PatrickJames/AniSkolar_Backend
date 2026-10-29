@@ -6,6 +6,7 @@ const mongoose = require('mongoose');
 const { requireAdso } = require('../middleware/requireAdmin');
 const { requireStudent, requireStudentOrAdmin } = require('../middleware/requireStudent');
 const Message = require('../models/Message');
+const MessageThread = require('../models/MessageThread');
 const Student = require('../models/Student');
 const Application = require('../models/Application');
 const { putFile, deleteFile, openFile } = require('../utils/gridfs');
@@ -36,7 +37,12 @@ const { listOffices, norm } = require('../utils/offices');
 //   GET  /api/messages/admin/threads/:studentNumber        one conversation + the student
 //   POST /api/messages/admin/threads/:studentNumber        send (multipart, as above)
 //   POST /api/messages/admin/threads/:studentNumber/read   mark the student's messages read
-//   GET  /api/messages/admin/offices/:office (+ POST, POST …/read)   a duty office's conversation
+//   PATCH /api/messages/admin/threads/:studentNumber/state { pinned?, archived?, unread? }
+//   DELETE /api/messages/admin/threads/:studentNumber      delete it from the AdSO's inbox
+//   GET  /api/messages/admin/offices/:office (+ POST, POST …/read, PATCH …/state, DELETE)
+//                                                          a duty office's conversation
+// Pinned, archived, marked unread and deleted are the AdSO's own inbox
+// state (models/MessageThread.js); the student or office keeps their copy.
 // Office head (office portal):
 //   GET  /api/messages/office/mine · GET …/mine/unread · POST …/mine/read · POST …/mine
 //   GET  /api/messages/office/files/:fileId
@@ -186,20 +192,81 @@ router.post('/mine', requireStudent, withUpload, async (req, res) => {
 
 // --- AdSO ----------------------------------------------------------------------
 
+// The AdSO's inbox state for a conversation (models/MessageThread.js).
+const threadQuery = (kind, key) => (kind === 'student' ? { studentNumber: key } : { office: key });
+const afterDeleted = st => (st?.clearedAt ? { createdAt: { $gt: st.clearedAt } } : {});
+const stateView = st => ({ pinned: !!st?.pinnedAt, archived: !!st?.archivedAt, markedUnread: !!st?.markedUnread });
+
+// Opening a conversation: the other side's messages are read, and a
+// "mark as unread" is cleared.
+async function markRead(kind, key) {
+  await Promise.all([
+    Message.updateMany({ ...threadQuery(kind, key), from: kind, readAt: null }, { $set: { readAt: new Date() } }),
+    MessageThread.updateOne({ kind, key }, { $set: { markedUnread: false } }),
+  ]);
+}
+
+// body: { pinned?, archived?, unread? } (booleans). Returns { state } or { error }.
+async function setState(kind, key, body = {}) {
+  const set = {};
+  for (const [field, value] of Object.entries(body)) {
+    if (!['pinned', 'archived', 'unread'].includes(field)) continue;
+    if (typeof value !== 'boolean') return { error: `${field} must be true or false.` };
+    if (field === 'pinned') set.pinnedAt = value ? new Date() : null;
+    if (field === 'archived') set.archivedAt = value ? new Date() : null;
+    if (field === 'unread') set.markedUnread = value;
+  }
+  if (!Object.keys(set).length) return { error: 'Nothing to change.' };
+  if (set.markedUnread === false) await markRead(kind, key);
+  const st = await MessageThread.findOneAndUpdate({ kind, key }, { $set: set }, { upsert: true, returnDocument: 'after' }).lean();
+  return { state: stateView(st) };
+}
+
+// Deletes the conversation from the AdSO's inbox only: its messages so far
+// are hidden from the AdSO (the student or office keeps their copy, and
+// attachments stay theirs). A new message starts it again.
+async function deleteForAdso(kind, key) {
+  const now = new Date();
+  await Message.updateMany({ ...threadQuery(kind, key), from: kind, readAt: null }, { $set: { readAt: now } });
+  await MessageThread.findOneAndUpdate(
+    { kind, key },
+    { $set: { clearedAt: now, pinnedAt: null, archivedAt: null, markedUnread: false } },
+    { upsert: true }
+  );
+}
+
 router.get('/admin/threads', requireAdso, async (req, res) => {
   try {
-    const group = (key, from) => Message.aggregate([
-      { $match: { [key]: { $nin: [null, ''] } } },
-      { $sort: { createdAt: -1 } },
-      { $group: {
-        _id: `$${key}`,
-        last: { $first: '$$ROOT' },
-        unread: { $sum: { $cond: [{ $and: [{ $eq: ['$from', from] }, { $eq: ['$readAt', null] }] }, 1, 0] } },
-        count: { $sum: 1 },
-      } },
-      { $sort: { 'last.createdAt': -1 } },
-      { $limit: 500 },
-    ]);
+    const states = await MessageThread.find().lean();
+    const stateOf = (kind, key) => states.find(t => t.kind === kind && t.key === key);
+    const group = (key, from) => {
+      const kind = key === 'studentNumber' ? 'student' : 'office';
+      // Messages the AdSO deleted stay hidden.
+      const deleted = states.filter(t => t.kind === kind && t.clearedAt).map(t => ({ [key]: t.key, createdAt: { $lte: t.clearedAt } }));
+      return Message.aggregate([
+        { $match: { [key]: { $nin: [null, ''] }, ...(deleted.length ? { $nor: deleted } : {}) } },
+        { $sort: { createdAt: -1 } },
+        { $group: {
+          _id: `$${key}`,
+          last: { $first: '$$ROOT' },
+          unread: { $sum: { $cond: [{ $and: [{ $eq: ['$from', from] }, { $eq: ['$readAt', null] }] }, 1, 0] } },
+          count: { $sum: 1 },
+          lastIncomingAt: { $max: { $cond: [{ $eq: ['$from', from] }, '$createdAt', null] } },
+        } },
+        { $sort: { 'last.createdAt': -1 } },
+        { $limit: 500 },
+      ]);
+    };
+    // The AdSO's inbox state; an archived conversation comes back to the
+    // inbox when the other side writes again.
+    const inbox = (kind, t) => {
+      const st = stateOf(kind, t._id);
+      return {
+        pinned: !!st?.pinnedAt,
+        archived: !!st?.archivedAt && !(t.lastIncomingAt && t.lastIncomingAt > st.archivedAt),
+        markedUnread: !!st?.markedUnread,
+      };
+    };
     const [threads, officeThreads, offices] = await Promise.all([group('studentNumber', 'student'), group('office', 'office'), listOffices()]);
     const headOf = new Map(offices.map(o => [norm(o.office), o]));
     const students = await Student.find({ studentNumber: { $in: threads.map(t => t._id) } })
@@ -220,6 +287,7 @@ router.get('/admin/threads', requireAdso, async (req, res) => {
           unread: t.unread,
           count: t.count,
           last: view(t.last),
+          ...inbox('student', t),
         };
       }).concat(officeThreads.map(t => ({
         kind: 'office',
@@ -230,7 +298,8 @@ router.get('/admin/threads', requireAdso, async (req, res) => {
         unread: t.unread,
         count: t.count,
         last: view(t.last),
-      }))).sort((a, b) => new Date(b.last.createdAt) - new Date(a.last.createdAt)),
+        ...inbox('office', t),
+      }))).sort((a, b) => (b.pinned - a.pinned) || (new Date(b.last.createdAt) - new Date(a.last.createdAt))),
     });
   } catch (err) {
     console.error('Load message threads error:', err);
@@ -240,7 +309,11 @@ router.get('/admin/threads', requireAdso, async (req, res) => {
 
 router.get('/admin/unread', requireAdso, async (req, res) => {
   try {
-    res.json({ unread: await Message.countDocuments({ from: { $in: ['student', 'office'] }, readAt: null }) });
+    const [unread, marked] = await Promise.all([
+      Message.countDocuments({ from: { $in: ['student', 'office'] }, readAt: null }),
+      MessageThread.countDocuments({ markedUnread: true }),
+    ]);
+    res.json({ unread: unread + marked });
   } catch (err) {
     console.error('Unread messages (admin) error:', err);
     res.status(500).json({ error: 'Failed to load messages.' });
@@ -256,8 +329,9 @@ router.get('/admin/threads/:studentNumber', requireAdso, async (req, res) => {
   try {
     const student = await findStudent(req.params.studentNumber);
     if (!student) return res.status(404).json({ error: 'Student not found.' });
+    const st = await MessageThread.findOne({ kind: 'student', key: student.studentNumber }).lean();
     const [messages, applications] = await Promise.all([
-      Message.find({ studentNumber: student.studentNumber }).sort({ createdAt: 1 }).limit(1000).lean(),
+      Message.find({ studentNumber: student.studentNumber, ...afterDeleted(st) }).sort({ createdAt: 1 }).limit(1000).lean(),
       Application.find({ studentNumber: student.studentNumber }).select('_id referenceCode scholarshipName status').sort({ createdAt: -1 }).lean(),
     ]);
     const { _id, ...info } = student;
@@ -265,6 +339,7 @@ router.get('/admin/threads/:studentNumber', requireAdso, async (req, res) => {
       student: info,
       applications: applications.map(a => ({ _id: String(a._id), referenceCode: a.referenceCode, scholarshipName: a.scholarshipName, status: a.status })),
       messages: messages.map(view),
+      state: stateView(st),
     });
   } catch (err) {
     console.error('Load message thread error:', err);
@@ -300,11 +375,36 @@ router.post('/admin/threads/:studentNumber/read', requireAdso, async (req, res) 
   try {
     const student = await findStudent(req.params.studentNumber);
     if (!student) return res.status(404).json({ error: 'Student not found.' });
-    await Message.updateMany({ studentNumber: student.studentNumber, from: 'student', readAt: null }, { $set: { readAt: new Date() } });
+    await markRead('student', student.studentNumber);
     res.json({ ok: true });
   } catch (err) {
     console.error('Mark thread read error:', err);
     res.status(500).json({ error: 'Failed to update the conversation.' });
+  }
+});
+
+router.patch('/admin/threads/:studentNumber/state', requireAdso, async (req, res) => {
+  try {
+    const student = await findStudent(req.params.studentNumber);
+    if (!student) return res.status(404).json({ error: 'Student not found.' });
+    const result = await setState('student', student.studentNumber, req.body);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json({ state: result.state });
+  } catch (err) {
+    console.error('Update thread state error:', err);
+    res.status(500).json({ error: 'Failed to update the conversation.' });
+  }
+});
+
+router.delete('/admin/threads/:studentNumber', requireAdso, async (req, res) => {
+  try {
+    const student = await findStudent(req.params.studentNumber);
+    if (!student) return res.status(404).json({ error: 'Student not found.' });
+    await deleteForAdso('student', student.studentNumber);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete thread error:', err);
+    res.status(500).json({ error: 'Failed to delete the conversation.' });
   }
 });
 
@@ -320,8 +420,9 @@ router.get('/admin/offices/:office', requireAdso, async (req, res) => {
   try {
     const office = await findOffice(req.params.office);
     if (!office) return res.status(404).json({ error: 'Office not found.' });
-    const messages = await Message.find({ office: office.office }).sort({ createdAt: 1 }).limit(1000).lean();
-    res.json({ office: { office: office.office, headName: office.headName ?? '', headEmail: office.headEmail ?? '' }, messages: messages.map(view) });
+    const st = await MessageThread.findOne({ kind: 'office', key: office.office }).lean();
+    const messages = await Message.find({ office: office.office, ...afterDeleted(st) }).sort({ createdAt: 1 }).limit(1000).lean();
+    res.json({ office: { office: office.office, headName: office.headName ?? '', headEmail: office.headEmail ?? '' }, messages: messages.map(view), state: stateView(st) });
   } catch (err) {
     console.error('Load office thread error:', err);
     res.status(500).json({ error: 'Failed to load the conversation.' });
@@ -354,11 +455,36 @@ router.post('/admin/offices/:office/read', requireAdso, async (req, res) => {
   try {
     const office = await findOffice(req.params.office);
     if (!office) return res.status(404).json({ error: 'Office not found.' });
-    await Message.updateMany({ office: office.office, from: 'office', readAt: null }, { $set: { readAt: new Date() } });
+    await markRead('office', office.office);
     res.json({ ok: true });
   } catch (err) {
     console.error('Mark office thread read error:', err);
     res.status(500).json({ error: 'Failed to update the conversation.' });
+  }
+});
+
+router.patch('/admin/offices/:office/state', requireAdso, async (req, res) => {
+  try {
+    const office = await findOffice(req.params.office);
+    if (!office) return res.status(404).json({ error: 'Office not found.' });
+    const result = await setState('office', office.office, req.body);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json({ state: result.state });
+  } catch (err) {
+    console.error('Update office thread state error:', err);
+    res.status(500).json({ error: 'Failed to update the conversation.' });
+  }
+});
+
+router.delete('/admin/offices/:office', requireAdso, async (req, res) => {
+  try {
+    const office = await findOffice(req.params.office);
+    if (!office) return res.status(404).json({ error: 'Office not found.' });
+    await deleteForAdso('office', office.office);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete office thread error:', err);
+    res.status(500).json({ error: 'Failed to delete the conversation.' });
   }
 });
 

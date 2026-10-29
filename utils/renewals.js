@@ -52,7 +52,7 @@ async function findHolders(period, studentNumber) {
   const studentMatch = studentNumber ? { studentNumber } : {};
 
   const approved = await Application.aggregate([
-    { $match: { scholarshipId: period.scholarshipId, status: 'Approved', ...studentMatch } },
+    { $match: { scholarshipId: period.scholarshipId, status: 'Approved', endedAt: null, ...studentMatch } },
     { $addFields: { ay: academicYearStartExpr('$createdAt') } },
     { $match: { ay: fromYear } },
     { $sort: { createdAt: -1 } },
@@ -79,7 +79,19 @@ async function findHolders(period, studentNumber) {
       }
     }
   }
+  // A scholarship the student ended since (declined for another one,
+  // graduated, stopped) isn't theirs to renew.
+  for (const sn of await endedSince(period.scholarshipId, fromYear, [...holders.keys()])) holders.delete(sn);
   return holders;
+}
+
+// Of these students, the ones whose application for the scholarship was
+// ended (endedAt) in academic year `fromYear` or later.
+async function endedSince(scholarshipId, fromYear, studentNumbers) {
+  if (!studentNumbers.length) return [];
+  const ended = await Application.find({ scholarshipId, studentNumber: { $in: studentNumbers }, endedAt: { $ne: null } }).select('studentNumber endedAt').lean();
+  const { academicYearStart } = require('./academicYear');
+  return ended.filter(a => academicYearStart(a.endedAt) >= fromYear).map(a => a.studentNumber);
 }
 
 // Who holds the scholarship *during* a term (not who may renew into it):
@@ -88,7 +100,7 @@ async function findHolders(period, studentNumber) {
 async function findCurrentHolders({ scholarshipId, academicYear, term }) {
   const [approved, period] = await Promise.all([
     Application.aggregate([
-      { $match: { scholarshipId, status: 'Approved' } },
+      { $match: { scholarshipId, status: 'Approved', endedAt: null } },
       { $addFields: { ay: academicYearStartExpr('$createdAt') } },
       { $match: { ay: academicYear } },
       { $group: { _id: '$studentNumber' } },
@@ -100,6 +112,7 @@ async function findCurrentHolders({ scholarshipId, academicYear, term }) {
     const renewed = await Renewal.find({ periodId: period._id, status: 'Renewed' }).select('studentNumber').lean();
     renewed.forEach(r => holders.add(r.studentNumber));
   }
+  for (const sn of await endedSince(scholarshipId, academicYear, [...holders])) holders.delete(sn);
   return holders;
 }
 

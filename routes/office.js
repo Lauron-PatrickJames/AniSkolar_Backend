@@ -12,6 +12,7 @@ const { summarize, currentTerm, todayInManila, entryHours } = require('../utils/
 const { findHolders, parseEvaluationScores, previousTerm, EVALUATION_ITEMS, PASSING_AVERAGE } = require('../utils/renewals');
 const { norm } = require('../utils/offices');
 const { queueEmails, processOutbox } = require('../utils/outbox');
+const { officeEvaluations, notifyIfReady, summariesFor, stateOf, nextTerm } = require('../utils/evaluations');
 const { renderEmail } = require('../utils/emailTemplate');
 
 // The office portal: the head of a duty office (listed by the AdSO in Duty
@@ -22,8 +23,10 @@ const { renderEmail } = require('../utils/emailTemplate');
 //                                                            (?all=1: every term, newest first)
 //   GET   /api/office/scholars/:studentNumber?academicYear=&term=   one scholar's duties
 //   PATCH /api/office/scholars/:studentNumber/entries        { academicYear, term, entryIds, status: 'confirmed' | 'flagged' | null, note }
-//   GET   /api/office/evaluations                            scholars to evaluate for open renewals
-//   PUT   /api/office/evaluations/:studentNumber             { periodId, scores, remarks }
+//   GET   /api/office/evaluations                            this and last term's scholars with their
+//                                                            evaluation state (in_progress / ready / done)
+//   PUT   /api/office/evaluations/:studentNumber             { academicYear, term, scores, remarks }
+//                                                            once the scholar's hours are complete
 //   GET   /api/office/requests  ·  POST /api/office/requests { kind, scholar, count, note }
 // Messages with the AdSO are in routes/messages.js (/api/messages/office…).
 
@@ -60,12 +63,14 @@ router.get('/scholars', requireOfficeHead, async (req, res) => {
     const students = await Student.find({ studentNumber: { $in: logs.map(l => l.studentNumber) } }).select('studentNumber name programCode yearLevel avatarUrl').lean();
     const byNumber = new Map(students.map(s => [s.studentNumber, s]));
     const today = todayInManila();
+    const full = await summariesFor(logs);
     res.json({
       term,
       current: currentTerm(),
       scholars: logs.map(l => {
         const s = byNumber.get(l.studentNumber);
         const summary = summarize(l, today, { confirmationRequired: true });
+        const f = full.get(String(l._id));
         return {
           studentNumber: l.studentNumber,
           name: s?.name ?? '',
@@ -79,6 +84,11 @@ router.get('/scholars', requireOfficeHead, async (req, res) => {
           waitingCount: summary.waitingCount,
           flaggedCount: summary.flaggedCount,
           lastDutyDate: summary.lastDutyDate,
+          // Toward the requirement (incl. approved event credit), and
+          // whether the head can evaluate yet.
+          completedHours: f?.completed ?? summary.regularHours,
+          requiredHours: f?.required ?? null,
+          evaluationState: stateOf(l, f),
         };
       }).sort((a, b) => b.academicYear - a.academicYear || b.term.localeCompare(a.term) || b.waitingCount - a.waitingCount || a.name.localeCompare(b.name)),
     });
@@ -149,6 +159,8 @@ router.patch('/scholars/:studentNumber/entries', requireOfficeHead, async (req, 
       { returnDocument: 'after' }
     ).lean();
     if (!updated) return res.status(409).json({ error: 'The scholar changed their duties. Reload and try again.' });
+    // Hours complete now? Email the head that they can evaluate.
+    if (status === 'confirmed') notifyIfReady(updated._id);
     res.json({
       entries: [...updated.entries].sort((a, b) => (a.date + a.timeIn).localeCompare(b.date + b.timeIn)).map(entryView),
       summary: summarize(updated, todayInManila(), { confirmationRequired: true }),
@@ -160,50 +172,12 @@ router.patch('/scholars/:studentNumber/entries', requireOfficeHead, async (req, 
 });
 
 // --- Evaluations ---------------------------------------------------------------
-
-// Open renewal periods that need the head's evaluation, with this office's
-// scholars for each: those who held the scholarship and did duty here in
-// the term the renewal looks back on.
-async function evaluationsDue(office) {
-  const periods = await RenewalPeriod.find({ open: true, requiresEvaluation: true }).lean();
-  const out = [];
-  for (const period of periods) {
-    const prev = previousTerm(period);
-    const holders = await findHolders(period);
-    const logs = await officeLogs(office, prev, { studentNumber: { $in: [...holders.keys()] } });
-    if (!logs.length) continue;
-    const numbers = logs.map(l => l.studentNumber);
-    const [students, renewals] = await Promise.all([
-      Student.find({ studentNumber: { $in: numbers } }).select('studentNumber name programCode yearLevel avatarUrl').lean(),
-      Renewal.find({ periodId: period._id, studentNumber: { $in: numbers } }).select('studentNumber status continuing').lean(),
-    ]);
-    const byNumber = new Map(students.map(s => [s.studentNumber, s]));
-    const renewalOf = new Map(renewals.map(r => [r.studentNumber, r]));
-    out.push({
-      period: { _id: String(period._id), scholarshipName: findScholarship(period.scholarshipId)?.name ?? period.scholarshipId, academicYear: period.academicYear, term: period.term, deadline: period.deadline ?? null, evaluatedTerm: prev },
-      scholars: logs.map(l => {
-        const s = byNumber.get(l.studentNumber);
-        const r = renewalOf.get(l.studentNumber);
-        return {
-          studentNumber: l.studentNumber,
-          name: s?.name ?? '',
-          program: s?.programCode ?? '',
-          yearLevel: s?.yearLevel ?? '',
-          avatarUrl: s?.avatarUrl,
-          evaluation: l.evaluation ? { scores: l.evaluation.scores, average: l.evaluation.average, remarks: l.evaluation.remarks ?? null, enteredAt: l.evaluation.enteredAt, source: l.evaluation.source ?? null } : null,
-          // Once the AdSO decides the renewal, the evaluation is final.
-          locked: !!r && ['Renewed', 'Not Renewed'].includes(r.status),
-          notContinuing: !!r && r.continuing === false,
-        };
-      }).sort((a, b) => Number(!!a.evaluation) - Number(!!b.evaluation) || a.name.localeCompare(b.name)),
-    });
-  }
-  return out;
-}
+// A scholar can be evaluated once their duty hours for the term are
+// complete (utils/evaluations.js); the head is emailed at that moment.
 
 router.get('/evaluations', requireOfficeHead, async (req, res) => {
   try {
-    res.json({ due: await evaluationsDue(req.officeHead.office) });
+    res.json({ terms: await officeEvaluations(req.officeHead.office) });
   } catch (err) {
     console.error('Office evaluations error:', err);
     res.status(500).json({ error: 'Failed to load the evaluations.' });
@@ -213,18 +187,21 @@ router.get('/evaluations', requireOfficeHead, async (req, res) => {
 router.put('/evaluations/:studentNumber', requireOfficeHead, async (req, res) => {
   try {
     const body = req.body || {};
-    if (!mongoose.Types.ObjectId.isValid(body.periodId)) return res.status(400).json({ error: 'Choose the renewal.' });
-    const period = await RenewalPeriod.findById(body.periodId).lean();
-    if (!period || !period.open || !period.requiresEvaluation) return res.status(400).json({ error: 'This renewal isn’t taking evaluations.' });
+    const { value: term, error: termError } = parseTerm({ academicYear: body.academicYear, term: body.term });
+    if (termError || body.academicYear === undefined) return res.status(400).json({ error: termError || 'Choose the term.' });
     const { scores, average, error } = parseEvaluationScores(body.scores);
     if (error) return res.status(400).json({ error });
-    const prev = previousTerm(period);
-    const [log] = await officeLogs(req.officeHead.office, prev, { studentNumber: req.params.studentNumber });
+    const log = await findOfficeLog(req, term);
     if (!log) return res.status(404).json({ error: 'This scholar didn’t render duty in your office that term.' });
-    const holders = await findHolders(period, req.params.studentNumber);
-    if (!holders.has(req.params.studentNumber)) return res.status(404).json({ error: 'This scholar isn’t up for this renewal.' });
-    const renewal = await Renewal.findOne({ periodId: period._id, studentNumber: req.params.studentNumber });
-    if (renewal && ['Renewed', 'Not Renewed'].includes(renewal.status)) return res.status(409).json({ error: 'The scholarship office already decided this renewal.' });
+    const summary = (await summariesFor([log])).get(String(log._id));
+    if (stateOf(log, summary) === 'in_progress') {
+      return res.status(409).json({ error: `You can evaluate once the scholar completes their hours (${summary?.completed ?? 0} of ${summary?.required ?? '?'} so far).` });
+    }
+    // The renewal that looks back on this term, if submitted.
+    const next = nextTerm(term);
+    const periods = await RenewalPeriod.find(next).select('_id').lean();
+    const renewal = periods.length ? await Renewal.findOne({ periodId: { $in: periods.map(p => p._id) }, studentNumber: log.studentNumber }) : null;
+    if (renewal && ['Renewed', 'Not Renewed'].includes(renewal.status)) return res.status(409).json({ error: 'The scholarship office already decided this scholar’s renewal.' });
 
     const evaluation = {
       scores,
@@ -237,8 +214,7 @@ router.put('/evaluations/:studentNumber', requireOfficeHead, async (req, res) =>
       source: 'office',
     };
     await DutyLog.updateOne({ _id: log._id }, { $set: { evaluation } });
-    // Into the renewal too, if the scholar already submitted it.
-    if (renewal) {
+    if (renewal && renewal.continuing) {
       renewal.evaluation = evaluation;
       await renewal.save();
     }

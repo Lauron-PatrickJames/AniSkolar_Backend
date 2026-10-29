@@ -1,4 +1,5 @@
 const AutomationSetting = require('../models/AutomationSetting');
+const { RENEWAL_DOCUMENTS } = require('../models/RenewalPeriod');
 const Application = require('../models/Application');
 const ApplicationDraft = require('../models/ApplicationDraft');
 const DutyLog = require('../models/DutyLog');
@@ -154,7 +155,7 @@ async function dutyReminders({ now }) {
       `- On track would be about ${fmt(expected)} hours by now`,
       s?.weeklyNeeded && log?.deadline
         ? `- To finish by ${longDate(log.deadline)}: about ${fmt(s.weeklyNeeded)} hours a week`
-        : '- Set your deadline on the Duty Hours page to see how much you need each week',
+        : '- The scholarship office will set this semester’s deadline; then you’ll see how much you need each week',
       `- Office: ${log?.officeAssigned || 'not assigned yet (the scholarship office will assign one)'}`,
     ];
     if (s?.waitingCount) lines.push(`- ${plural(s.waitingCount, 'duty', 'duties')} waiting for your office to confirm (only confirmed duties count)`);
@@ -171,33 +172,6 @@ async function dutyReminders({ now }) {
     }));
   }
   return { emails, summary: emails.length ? `${plural(emails.length, 'scholar')} behind (${notStarted} not started).` : 'Every scholar is on track.' };
-}
-
-// Scholars each office head still has to evaluate, for open renewal
-// periods that need an evaluation: Map normalized office -> [{ period, count }].
-async function pendingEvaluations() {
-  const byOffice = new Map();
-  const periods = await RenewalPeriod.find({ open: true, requiresEvaluation: true }).lean();
-  for (const period of periods) {
-    const prev = previousTerm(period);
-    const holders = await findHolders(period);
-    const [logs, renewals] = await Promise.all([
-      DutyLog.find({ ...prev, studentNumber: { $in: [...holders.keys()] }, officeAssigned: { $nin: [null, ''] } }).select('studentNumber officeAssigned evaluation').lean(),
-      Renewal.find({ periodId: period._id }).select('studentNumber status evaluation').lean(),
-    ]);
-    const renewalOf = new Map(renewals.map(r => [r.studentNumber, r]));
-    for (const log of logs) {
-      const r = renewalOf.get(log.studentNumber);
-      if (log.evaluation?.average || r?.evaluation?.average) continue;
-      if (r && r.status !== 'Under Evaluation' && r.status !== 'Needs Revision') continue;
-      const k = norm(log.officeAssigned);
-      const list = byOffice.get(k) ?? [];
-      const item = list.find(x => String(x.period._id) === String(period._id));
-      if (item) item.count++; else list.push({ period, count: 1 });
-      byOffice.set(k, list);
-    }
-  }
-  return byOffice;
 }
 
 async function officeHeadReminders({ now }) {
@@ -220,16 +194,16 @@ async function officeHeadReminders({ now }) {
     w.scholars.add(log.studentNumber);
     waiting.set(k, w);
   }
-  const evaluations = await pendingEvaluations();
+  const ready = await require('./evaluations').readyCounts();
   const emails = [];
   for (const head of heads) {
     const k = norm(head.office);
     const w = waiting.get(k);
-    const evals = evaluations.get(k) ?? [];
-    if (!w?.duties && !evals.length) continue;
+    const toEvaluate = ready.get(k) ?? 0;
+    if (!w?.duties && !toEvaluate) continue;
     const lines = [`Good day${head.headName ? `, ${head.headName}` : ''}!`, '', `Here is what is waiting for you in AniSkolar for ${head.office}:`, ''];
     if (w?.duties) lines.push(`- ${plural(w.duties, 'duty', 'duties')} from ${plural(w.scholars.size, 'scholar')} to confirm or flag (only confirmed duties count toward their hours)`);
-    for (const e of evals) lines.push(`- ${plural(e.count, 'scholar')} to evaluate for the ${findScholarship(e.period.scholarshipId)?.name ?? 'scholarship'} renewal${e.period.deadline ? ` (deadline: ${e.period.deadline})` : ''}`);
+    if (toEvaluate) lines.push(`- ${plural(toEvaluate, 'scholar')} who finished their duty hours, ready for your evaluation`);
     lines.push('', 'Sign in to AniSkolar with your school email to open your office portal.');
     emails.push(email({
       key: `officehead:${head.headEmail}:${week}`,
@@ -268,7 +242,7 @@ async function deadlineReminders({ now }) {
         subject: `AniSkolar: renew your ${name} by ${longDate(deadline)}`,
         heading: `${left === 1 ? 'Tomorrow' : 'In 3 days'}: ${name} renewal deadline`,
         intro: `You haven't submitted your renewal for the ${period.term}, A.Y. ${period.academicYear}–${period.academicYear + 1}.`,
-        body: [hi(students.get(sn)), '', `The deadline is ${longDate(deadline)}. Open Renewals in AniSkolar to submit it${(period.requirements || []).length ? ', with:' : '.'}`, ...(period.requirements || []).map(r => `- ${r}`), '', "If you're not continuing (OJT, graduating, transferring), say so in the same form so the office knows."].join('\n'),
+        body: [hi(students.get(sn)), '', `The deadline is ${longDate(deadline)}. Open Renewals in AniSkolar to submit your grades:`, ...RENEWAL_DOCUMENTS.map(r => `- ${r}`), '', "If you're not continuing (OJT, graduating, transferring), say so in the same form so the office knows."].join('\n'),
       }));
     }
   }
