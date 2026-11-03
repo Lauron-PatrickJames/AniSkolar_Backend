@@ -18,8 +18,15 @@
 // awarded by nomination, ranking or recruitment,
 // so POST /api/applications refuses them.
 //
+// opensOn / closesOn: the default application period (YYYY-MM-DD), until
+// the office picks its own (utils/scholarshipDates.js). Keep them the
+// same as the frontend's.
+//
 // referenceCode: the short code that starts each new application's
 // reference number (utils/referenceCode.js), e.g. 'ENT' → ENT-2026-0001.
+//
+// directAward: the office adds its scholars itself (no application), e.g.
+// the SDO from its tryouts.
 //
 // noRenewal: no renewals — an approved scholar keeps it until they graduate
 // or stop, which their office records on the application (PATCH
@@ -46,8 +53,8 @@ const ALUMNI_INSTITUTIONS = ['DLSU-EAC', 'DLSU-Aguinaldo', 'DLSU-Dasmariñas'];
 const ALUMNI_RELATIONSHIPS = ['Parent', 'Sibling', 'Grandparent', 'Grandchild'];
 
 const SCHOLARSHIPS = [
-  { id: 's1', name: 'Student Financial Aid Grant (SFAG)', office: 'LSO', formType: 'sfag', referenceCode: 'SFAG' },
-  { id: 's2', name: 'Entrance Scholarship', office: 'LSO', formType: 'standard', referenceCode: 'ENT' },
+  { id: 's1', name: 'Student Financial Aid Grant (SFAG)', office: 'LSO', formType: 'sfag', referenceCode: 'SFAG', opensOn: '2026-06-16', closesOn: '2026-07-03' },
+  { id: 's2', name: 'Entrance Scholarship', office: 'LSO', formType: 'standard', referenceCode: 'ENT', opensOn: '2026-06-01', closesOn: '2026-06-20' },
   {
     id: 's3',
     name: 'POLCA Scholarship (PSEF)',
@@ -111,7 +118,10 @@ const SCHOLARSHIPS = [
   { id: 's6', name: 'Enhanced Brother President Scholarship Program (EBPSP)', office: 'LSO', formType: 'standard', referenceCode: 'EBPSP' },
   // Run by their own offices (they open them, decide, renew); the AdSO sees
   // the approved scholars. They start closed until the office opens them.
-  { id: 's7', defaultStatus: 'Closed', name: 'Athletic Scholarship', office: 'SDO', formType: 'standard', referenceCode: 'ATH' },
+  // The SDO picks its scholars from the varsity tryouts: no application
+  // and no renewals. It adds each one itself (POST
+  // /api/applications/direct-award) with the coach's document.
+  { id: 's7', defaultStatus: 'Closed', name: 'Athletic Scholarship', office: 'SDO', formType: 'standard', referenceCode: 'ATH', applicationMode: 'info', noRenewal: true, directAward: true },
   { id: 's8', defaultStatus: 'Closed', name: 'Vicissitude Scholarship Program', office: 'VICISSITUDE', formType: 'standard', referenceCode: 'VIC' },
   // s9 (Performing Arts Group) was removed: PAG declined to partner with AniSkolar.
   { id: 's10', defaultStatus: 'Closed', name: '267th NROTC Scholarship', office: 'ROTC', formType: 'standard', referenceCode: 'ROTC' },

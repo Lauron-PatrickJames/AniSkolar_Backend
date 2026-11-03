@@ -26,6 +26,10 @@ const { renderEmail } = require('../utils/emailTemplate');
 //                                                            evaluation state (in_progress / ready / done)
 //   PUT   /api/office/evaluations/:studentNumber             { academicYear, term, scores, remarks }
 //                                                            once the scholar's hours are complete
+//   GET   /api/office/announcements                          what this office posted
+//   POST  /api/office/announcements                          { title, content, email } to the scholars
+//                                                            assigned to it this term (published now)
+//   DELETE /api/office/announcements/:id
 // Messages with the AdSO are in routes/messages.js (/api/messages/office…).
 
 const TERMS = DutyLog.TERMS;
@@ -229,6 +233,76 @@ router.put('/evaluations/:studentNumber', requireOfficeHead, async (req, res) =>
   } catch (err) {
     console.error('Save office evaluation error:', err);
     res.status(500).json({ error: 'Failed to save the evaluation.' });
+  }
+});
+
+// --- Announcements to this office's scholars ---------------------------------
+// Saved as announcements with dutyOffice set: left out of the public feed,
+// shown to the scholars assigned here (GET /api/announcements/feed/duty).
+
+const Announcement = require('../models/Announcement');
+const { updateEmailQueue, processEmailQueue } = require('../utils/announcementEmails');
+
+const announcementView = a => ({
+  id: String(a._id), title: a.title, content: a.content, publishedAt: a.publishedAt,
+  emailEnabled: a.emailEnabled, emailStatus: a.emailStatus, emailSent: a.emailSent, emailTotal: a.emailTotal,
+});
+
+async function ownAnnouncements(office) {
+  const docs = await Announcement.find({ dutyOffice: { $ne: null } }).sort({ publishedAt: -1 }).limit(200);
+  return docs.filter(d => norm(d.dutyOffice) === norm(office));
+}
+
+router.get('/announcements', requireOfficeHead, async (req, res) => {
+  try {
+    res.json({ announcements: (await ownAnnouncements(req.officeHead.office)).map(announcementView) });
+  } catch (err) {
+    console.error('Office announcements error:', err);
+    res.status(500).json({ error: 'Failed to load your announcements.' });
+  }
+});
+
+router.post('/announcements', requireOfficeHead, async (req, res) => {
+  try {
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    const content = typeof req.body?.content === 'string' ? req.body.content.trim() : '';
+    if (!title || !content) return res.status(400).json({ error: 'Write a title and the message.' });
+    if (title.length > 150 || content.length > 8000) return res.status(400).json({ error: 'Keep the title under 150 characters and the message under 8,000.' });
+    const email = req.body?.email === true;
+    const scholars = email ? [...new Set((await officeLogs(req.officeHead.office, currentTerm())).map(l => l.studentNumber))] : [];
+    if (email && !scholars.length) return res.status(400).json({ error: 'No scholars are assigned to your office this term, so there’s no one to email.' });
+    const doc = new Announcement({
+      title,
+      description: content.length > 200 ? `${content.slice(0, 197).trimEnd()}…` : content,
+      content,
+      category: 'General',
+      status: 'published',
+      publishedAt: new Date(),
+      dutyOffice: req.officeHead.office,
+      createdBy: req.officeHead.email,
+      emailEnabled: email,
+      ...(email ? { emailTarget: { mode: 'students', scholarshipIds: [], statuses: [], colleges: [], yearLevels: [], studentNumbers: scholars } } : {}),
+    });
+    updateEmailQueue(doc);
+    await doc.save();
+    if (doc.emailStatus === 'queued') processEmailQueue().catch(err => console.error('Sending office announcement emails failed:', err));
+    res.status(201).json({ announcement: announcementView(doc) });
+  } catch (err) {
+    console.error('Create office announcement error:', err);
+    res.status(500).json({ error: 'Failed to post the announcement.' });
+  }
+});
+
+router.delete('/announcements/:id', requireOfficeHead, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(404).json({ error: 'Announcement not found.' });
+    const doc = await Announcement.findById(req.params.id);
+    if (!doc || norm(doc.dutyOffice) !== norm(req.officeHead.office)) return res.status(404).json({ error: 'Announcement not found.' });
+    await doc.deleteOne();
+    res.json({ deleted: true });
+  } catch (err) {
+    console.error('Delete office announcement error:', err);
+    res.status(500).json({ error: 'Failed to delete the announcement.' });
   }
 });
 

@@ -60,6 +60,22 @@ const APPLICATION_DOCUMENT_FIELDS = [
   { name: 'vicinitySketch', maxCount: 1 },
 ];
 
+// --- Event attendance sheets ---
+// The signed sheets from an event, photographed or scanned: JPG, PNG or
+// PDF, up to MAX_SHEET_FILES at a time (routes/dutyHours.js checks the
+// first bytes).
+const MAX_SHEET_FILES = 10;
+const SHEET_TYPES = { 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'], 'application/pdf': ['.pdf'] };
+const attendanceSheetUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_SIZE, files: MAX_SHEET_FILES },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!SHEET_TYPES[file.mimetype]?.includes(ext)) return cb(new Error(`"${file.originalname}" must be a JPG, PNG or PDF.`));
+    cb(null, true);
+  },
+}).array('sheets', MAX_SHEET_FILES);
+
 // --- Announcement images (up to MAX_ANNOUNCEMENT_IMAGES per announcement) ---
 // JPG or PNG (both show on Facebook and inline in Outlook emails), held in
 // memory; the route checks each file's first bytes, stores it and, when
@@ -79,4 +95,4 @@ const announcementImageUpload = multer({
   },
 }).array('images', MAX_ANNOUNCEMENT_IMAGES);
 
-module.exports = { profileUpload, applicationUpload, announcementImageUpload, MAX_ANNOUNCEMENT_IMAGES, APPLICATION_DOCUMENT_FIELDS };
+module.exports = { profileUpload, applicationUpload, announcementImageUpload, attendanceSheetUpload, MAX_ANNOUNCEMENT_IMAGES, APPLICATION_DOCUMENT_FIELDS };

@@ -9,7 +9,7 @@ const Renewal = require('../models/Renewal');
 const RenewalPeriod = require('../models/RenewalPeriod');
 const ScholarshipSetting = require('../models/ScholarshipSetting');
 const Student = require('../models/Student');
-const { findScholarship } = require('../data/scholarships');
+const { findScholarship, allScholarships } = require('../data/scholarships');
 const { academicYearStart } = require('./academicYear');
 const { currentTerm, todayInManila } = require('./dutyHours');
 const { findHolders, findCurrentHolders, previousTerm } = require('./renewals');
@@ -243,9 +243,13 @@ async function deadlineReminders({ now }) {
 
   // Application drafts not yet submitted, 3 days and 1 day before the
   // scholarship's deadline.
-  const settings = await ScholarshipSetting.find({ deadline: { $nin: [null, ''] }, status: { $ne: 'Closed' } }).select('scholarshipId deadline').lean();
-  for (const setting of settings) {
-    const deadline = parseDeadline(setting.deadline);
+  // The picked closing date, else the code default, else a typed deadline.
+  const settings = new Map((await ScholarshipSetting.find({}).select('scholarshipId status deadline closesOn').lean()).map(s => [s.scholarshipId, s]));
+  const scholarships = allScholarships()
+    .map(s => ({ scholarshipId: s.id, setting: settings.get(s.id), closesOn: settings.get(s.id)?.closesOn ?? s.closesOn }))
+    .filter(x => (x.setting?.status ?? 'Open') !== 'Closed');
+  for (const setting of scholarships) {
+    const deadline = setting.closesOn || parseDeadline(setting.setting?.deadline);
     const left = deadline ? daysBetween(today, deadline) : null;
     if (left !== 3 && left !== 1) continue;
     const name = findScholarship(setting.scholarshipId)?.name ?? 'scholarship';
