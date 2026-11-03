@@ -73,6 +73,11 @@ const announcementSchema = new mongoose.Schema(
       type: String,
       default: null
     },
+    // Who posted it. office: the scholarship office (an office code; null
+    // or 'LSO' = the AdSO). dutyOffice: a duty office's name (Office
+    // portal), for the scholars assigned to it only — not in the public feed.
+    office: { type: String, default: null },
+    dutyOffice: { type: String, default: null },
     publishedAt: {
       type: Date,
       default: null
@@ -188,6 +193,8 @@ announcementSchema.methods.toClientShape = function toClientShape() {
     content: this.content,
     category: this.category,
     scholarshipId: this.scholarshipId || null,
+    office: this.office || 'LSO',
+    dutyOffice: this.dutyOffice || null,
     // Admin extensions — present for the admin dashboard, harmless extra
     // keys for the student portal.
     status: this.status,
@@ -226,6 +233,7 @@ announcementSchema.methods.toFeedShape = function toFeedShape() {
     content: this.content,
     category: this.category,
     scholarshipId: this.scholarshipId || null,
+    postedBy: this.dutyOffice || require('../data/offices').OFFICE_NAMES[this.office || 'LSO'] || null,
     imageUrls: imageUrls(this),
     fbPermalink: this.fbPostId ? this.fbPermalink : null
   };

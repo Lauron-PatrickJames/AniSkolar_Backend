@@ -12,6 +12,9 @@ const { norm, officesWithHeads } = require('../utils/offices');
 const Student = require('../models/Student');
 const { findCurrentHolders } = require('../utils/renewals');
 const { summarize, parseLog, currentTerm, todayInManila, isValidDate } = require('../utils/dutyHours');
+const multer = require('multer');
+const { attendanceSheetUpload } = require('../middleware/uploadConfig');
+const { putFile, openFile, deleteFile } = require('../utils/gridfs');
 
 // Duty hours monitoring.
 //
@@ -20,8 +23,8 @@ const { summarize, parseLog, currentTerm, todayInManila, isValidDate } = require
 // SFAG scholar (approved for or renewed on the SFAG at some point; others get 403):
 //   GET /api/duty-hours/mine?academicYear=&term=   their log for a term (default: current) + totals
 //   PUT /api/duty-hours/mine                       save the whole log for a term
-//   POST /api/duty-hours/mine/claims               { eventId } claim attending a credited event (Pending)
-//   DELETE /api/duty-hours/mine/claims/:eventId    withdraw a Pending claim
+//   DELETE /api/duty-hours/mine/claims/:eventId    withdraw a Pending claim made before the
+//                                                  attendance sheets (scholars no longer claim)
 //
 // AdSO:
 //   GET /api/duty-hours/admin?academicYear=&term=  every SFAG holder for the term, plus any other
@@ -37,6 +40,13 @@ const { summarize, parseLog, currentTerm, todayInManila, isValidDate } = require
 //   PUT /api/duty-hours/admin/events/:id           edit one
 //   DELETE /api/duty-hours/admin/events/:id        delete one (not once a claim is approved)
 //   PUT /api/duty-hours/admin/claims               { studentNumber, eventId, status: Approved|Rejected, note }
+//                                                  (older claims made by scholars)
+//   POST /api/duty-hours/admin/events/:id/sheets   multipart "sheets": the signed attendance sheets
+//   GET  /api/duty-hours/admin/events/:id/sheets/:fileId   one sheet
+//   DELETE /api/duty-hours/admin/events/:id/sheets/:fileId
+//   GET  /api/duty-hours/admin/events/:id/attendance       the term's SFAG scholars, who attended
+//   PUT  /api/duty-hours/admin/events/:id/attendance       { studentNumbers } exactly who attended:
+//                                                  they're credited, anyone unticked is uncredited
 //   PUT /api/duty-hours/admin/office-slots         { officeSlots: [{ office, slots }] } — how many
 //                                                  scholars each office takes (for Random assign)
 //   PUT /api/duty-hours/admin/deadline             { academicYear, term, deadline } the term's duty
@@ -101,6 +111,15 @@ async function termEvents(term) {
 
 function eventView(e) {
   return { _id: String(e._id), name: e.name, date: e.date, organizer: e.organizer, creditHours: e.creditHours };
+}
+
+// The admin's view adds the uploaded sheets and when attendance was saved.
+function adminEventView(e) {
+  return {
+    ...eventView(e),
+    sheets: (e.sheets || []).map(s => ({ fileId: String(s.fileId), filename: s.filename, mimetype: s.mimetype, size: s.size, uploadedAt: s.uploadedAt })),
+    attendanceSavedAt: e.attendanceSavedAt ?? null,
+  };
 }
 
 // The scholar's claims with their events (claims whose event was deleted
@@ -442,7 +461,14 @@ function parseEvent(body) {
   return { value: { name, date: body.date, organizer: body.organizer, creditHours: Math.round(creditHours * 100) / 100, ...term } };
 }
 
-router.post('/mine/claims', requireSfagScholar, async (req, res) => {
+// Scholars sign the event's attendance sheet instead; the AdSO credits
+// them from it.
+router.post('/mine/claims', requireSfagScholar, (req, res) => {
+  res.status(410).json({ error: 'Sign the attendance sheet at the event. The scholarship office credits you from it.' });
+});
+
+// Unused since the attendance sheets; kept for reference.
+router.post('/mine/claims-legacy', requireSfagScholar, async (req, res) => {
   try {
     const eventId = req.body?.eventId;
     if (typeof eventId !== 'string' || !mongoose.Types.ObjectId.isValid(eventId)) return res.status(400).json({ error: 'Choose an event.' });
@@ -511,7 +537,7 @@ router.get('/admin/events', requireAdso, async (req, res) => {
     const nameOf = new Map(students.map(s => [s.studentNumber, s.name]));
     res.json({
       term,
-      events: [...eventsById.values()].map(e => ({ ...eventView(e), claims: counts.get(String(e._id)) ?? { Pending: 0, Approved: 0, Rejected: 0 } })),
+      events: [...eventsById.values()].map(e => ({ ...adminEventView(e), claims: counts.get(String(e._id)) ?? { Pending: 0, Approved: 0, Rejected: 0 } })),
       pending: pending
         .sort((a, b) => new Date(a.claimedAt) - new Date(b.claimedAt))
         .map(p => ({ ...p, name: nameOf.get(p.studentNumber) ?? '', event: eventView(eventsById.get(p.eventId)) })),
@@ -567,6 +593,7 @@ router.delete('/admin/events/:id', requireAdso, async (req, res) => {
     }
     await DutyLog.updateMany({ 'eventClaims.event': event._id }, { $pull: { eventClaims: { event: event._id } } });
     await DutyEvent.deleteOne({ _id: event._id });
+    for (const s of event.sheets || []) await deleteFile(s.fileId).catch(err => console.error('Failed to delete an attendance sheet:', err.message));
     res.json({ deleted: true });
   } catch (err) {
     console.error('Delete duty event error:', err);
@@ -603,6 +630,166 @@ router.put('/admin/claims', requireAdso, async (req, res) => {
   } catch (err) {
     console.error('Review event claim error:', err);
     res.status(500).json({ error: 'Failed to save the decision.' });
+  }
+});
+
+// --- Attendance sheets --------------------------------------------------------------
+
+const SHEET_SIGNATURES = { 'image/jpeg': [0xff, 0xd8, 0xff], 'image/png': [0x89, 0x50, 0x4e, 0x47], 'application/pdf': [0x25, 0x50, 0x44, 0x46] };
+const isRealSheet = f => SHEET_SIGNATURES[f.mimetype]?.every((b, i) => f.buffer[i] === b);
+const MAX_SHEETS = 30;
+
+async function findEvent(req, res) {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) { res.status(400).json({ error: 'Invalid event.' }); return null; }
+  const event = await DutyEvent.findById(req.params.id);
+  if (!event) { res.status(404).json({ error: 'Event not found.' }); return null; }
+  return event;
+}
+
+router.post('/admin/events/:id/sheets', requireAdso, (req, res, next) => {
+  attendanceSheetUpload(req, res, err => {
+    if (err instanceof multer.MulterError) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Each file must be under 10MB.' : 'Upload at most 10 files at a time.' });
+    if (err) return res.status(400).json({ error: err.message });
+    next();
+  });
+}, async (req, res) => {
+  try {
+    const event = await findEvent(req, res);
+    if (!event) return;
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'Choose the photos or scans of the signed sheets.' });
+    const bad = files.find(f => !isRealSheet(f));
+    if (bad) return res.status(400).json({ error: `"${bad.originalname}" isn't a real JPG, PNG or PDF.` });
+    if (event.sheets.length + files.length > MAX_SHEETS) return res.status(400).json({ error: `An event can have up to ${MAX_SHEETS} sheet files.` });
+    const by = req.adminUser.email || req.adminUser.id;
+    for (const f of files) {
+      const fileId = await putFile({ buffer: f.buffer, filename: f.originalname, mimetype: f.mimetype, metadata: { kind: 'attendance-sheet', eventId: String(event._id) } });
+      event.sheets.push({ fileId, filename: f.originalname, mimetype: f.mimetype, size: f.size, uploadedBy: by, uploadedAt: new Date() });
+    }
+    await event.save();
+    res.status(201).json({ event: adminEventView(event) });
+  } catch (err) {
+    console.error('Upload attendance sheet error:', err);
+    res.status(500).json({ error: 'Failed to upload the sheets.' });
+  }
+});
+
+router.get('/admin/events/:id/sheets/:fileId', requireAdso, async (req, res) => {
+  try {
+    const event = await findEvent(req, res);
+    if (!event) return;
+    const sheet = event.sheets.find(s => String(s.fileId) === req.params.fileId);
+    if (!sheet) return res.status(404).json({ error: 'Sheet not found.' });
+    const file = await openFile(sheet.fileId);
+    if (!file) return res.status(404).json({ error: 'Sheet not found.' });
+    res.set('Content-Type', sheet.mimetype || file.contentType || 'application/octet-stream');
+    res.set('Content-Disposition', `inline; filename="${encodeURIComponent(sheet.filename || 'sheet')}"`);
+    res.set('Cache-Control', 'private, max-age=300');
+    file.stream.on('error', () => { if (!res.headersSent) res.status(404).end(); else res.end(); }).pipe(res);
+  } catch (err) {
+    console.error('Open attendance sheet error:', err);
+    res.status(500).json({ error: 'Failed to open the sheet.' });
+  }
+});
+
+router.delete('/admin/events/:id/sheets/:fileId', requireAdso, async (req, res) => {
+  try {
+    const event = await findEvent(req, res);
+    if (!event) return;
+    const sheet = event.sheets.find(s => String(s.fileId) === req.params.fileId);
+    if (!sheet) return res.status(404).json({ error: 'Sheet not found.' });
+    event.sheets = event.sheets.filter(s => s !== sheet);
+    await event.save();
+    await deleteFile(sheet.fileId).catch(err => console.error('Failed to delete an attendance sheet:', err.message));
+    res.json({ event: adminEventView(event) });
+  } catch (err) {
+    console.error('Delete attendance sheet error:', err);
+    res.status(500).json({ error: 'Failed to delete the sheet.' });
+  }
+});
+
+// The term's SFAG scholars (holders, and anyone who logged for the term),
+// for ticking who signed the sheet.
+async function termScholars(term) {
+  const [holders, logged] = await Promise.all([
+    findCurrentHolders({ scholarshipId: DUTY_SCHOLARSHIP_ID, ...term }),
+    DutyLog.find(term).distinct('studentNumber'),
+  ]);
+  const others = await everSfag(logged.filter(n => !holders.has(n)));
+  const numbers = [...new Set([...holders.keys(), ...others])];
+  const students = await Student.find({ studentNumber: { $in: numbers } }).select('studentNumber name programCode yearLevel').lean();
+  const byNumber = new Map(students.map(s => [s.studentNumber, s]));
+  return numbers.map(n => ({ studentNumber: n, name: byNumber.get(n)?.name ?? '', program: byNumber.get(n)?.programCode ?? '', yearLevel: byNumber.get(n)?.yearLevel ?? '' }));
+}
+
+router.get('/admin/events/:id/attendance', requireAdso, async (req, res) => {
+  try {
+    const event = await findEvent(req, res);
+    if (!event) return;
+    const term = { academicYear: event.academicYear, term: event.term };
+    const [scholars, logs] = await Promise.all([
+      termScholars(term),
+      DutyLog.find({ ...term, 'eventClaims.event': event._id }).select('studentNumber eventClaims').lean(),
+    ]);
+    const statusOf = new Map(logs.map(l => [l.studentNumber, l.eventClaims.find(c => String(c.event) === String(event._id))?.status]));
+    res.json({
+      event: adminEventView(event),
+      scholars: scholars
+        .map(s => ({ ...s, attended: statusOf.get(s.studentNumber) === 'Approved', claim: statusOf.get(s.studentNumber) ?? null }))
+        .sort((a, b) => a.name.localeCompare(b.name) || a.studentNumber.localeCompare(b.studentNumber)),
+    });
+  } catch (err) {
+    console.error('Load attendance error:', err);
+    res.status(500).json({ error: 'Failed to load the attendance.' });
+  }
+});
+
+router.put('/admin/events/:id/attendance', requireAdso, async (req, res) => {
+  try {
+    const event = await findEvent(req, res);
+    if (!event) return;
+    if (event.date > todayInManila()) return res.status(400).json({ error: 'You can check attendance once the event has taken place.' });
+    const raw = req.body?.studentNumbers;
+    if (!Array.isArray(raw) || raw.some(n => typeof n !== 'string')) return res.status(400).json({ error: 'Send who attended.' });
+    const attended = [...new Set(raw.map(n => n.trim()).filter(Boolean))];
+    const term = { academicYear: event.academicYear, term: event.term };
+    const allowed = new Set((await termScholars(term)).map(s => s.studentNumber));
+    const unknown = attended.filter(n => !allowed.has(n));
+    if (unknown.length) return res.status(400).json({ error: `Not an SFAG scholar this term: ${unknown.slice(0, 5).join(', ')}${unknown.length > 5 ? '…' : ''}.` });
+
+    const by = req.adminUser.email || req.adminUser.id;
+    const now = new Date();
+    const claim = { event: event._id, status: 'Approved', claimedAt: now, reviewedBy: by, reviewedAt: now, note: 'Attendance sheet' };
+    const termDeadline = await DutySetting.deadlineFor(term);
+    const credited = [];
+    for (const studentNumber of attended) {
+      // An existing claim becomes Approved; otherwise one is added.
+      const updated = await DutyLog.findOneAndUpdate(
+        { studentNumber, ...term, eventClaims: { $elemMatch: { event: event._id, status: { $ne: 'Approved' } } } },
+        { $set: { 'eventClaims.$.status': 'Approved', 'eventClaims.$.reviewedBy': by, 'eventClaims.$.reviewedAt': now, 'eventClaims.$.note': 'Attendance sheet' } },
+        { returnDocument: 'after' }
+      ).lean() ?? await DutyLog.findOneAndUpdate(
+        { studentNumber, ...term, 'eventClaims.event': { $ne: event._id } },
+        { $push: { eventClaims: claim }, $setOnInsert: { entries: [], specialEvents: [], ...(termDeadline ? { deadline: termDeadline } : {}) } },
+        { upsert: true, returnDocument: 'after', runValidators: true, setDefaultsOnInsert: true }
+      ).lean().catch(err => (err.code === 11000 ? null : Promise.reject(err)));
+      if (updated) credited.push(updated._id);
+    }
+    // Unticked: no credit for this event.
+    const removed = await DutyLog.updateMany(
+      { ...term, studentNumber: { $nin: attended }, 'eventClaims.event': event._id },
+      { $pull: { eventClaims: { event: event._id } } }
+    );
+    event.attendanceSavedAt = now;
+    event.attendanceSavedBy = by;
+    await event.save();
+    // The credit can complete someone's hours: tell their office head.
+    const { notifyIfReady } = require('../utils/evaluations');
+    for (const id of credited) notifyIfReady(id);
+    res.json({ event: adminEventView(event), attended: attended.length, uncredited: removed.modifiedCount });
+  } catch (err) {
+    console.error('Save attendance error:', err);
+    res.status(500).json({ error: 'Failed to save the attendance.' });
   }
 });
 

@@ -34,7 +34,27 @@ const LIST_FIELDS = ['benefits', 'process'];
 const CHOICE_LIST_FIELDS = ['customEligibility', 'customDocuments'];
 const CATEGORIES = ['Academic', 'Financial', 'Athletic', 'Leadership', 'Others'];
 const { OFFICE_CODES: OFFICES } = require('../data/offices');
-const TEXT_LIMITS = { deadline: 200, description: 4000, submissionNote: 500, schedule: 300 };
+const TEXT_LIMITS = { deadline: 200, description: 4000, submissionNote: 500, schedule: 300, scheduleVenue: 150 };
+const { isDate, isTime, periodOf } = require('../utils/scholarshipDates');
+
+// Picked dates (YYYY-MM-DD) and a time (HH:MM). Returns an error or null.
+function parseDates(body, set, unset, current = {}) {
+  for (const field of ['opensOn', 'closesOn', 'scheduleOn']) {
+    if (body[field] === undefined) continue;
+    if (body[field] === null || body[field] === '') { unset[field] = ''; continue; }
+    if (!isDate(body[field])) return 'Pick the date from the calendar.';
+    set[field] = body[field];
+  }
+  if (body.scheduleTime !== undefined) {
+    if (body.scheduleTime === null || body.scheduleTime === '') unset.scheduleTime = '';
+    else if (!isTime(body.scheduleTime)) return 'Pick the time.';
+    else set.scheduleTime = body.scheduleTime;
+  }
+  const opensOn = 'opensOn' in unset ? null : set.opensOn ?? current.opensOn;
+  const closesOn = 'closesOn' in unset ? null : set.closesOn ?? current.closesOn;
+  if (opensOn && closesOn && closesOn < opensOn) return 'The closing date can’t be before the opening date.';
+  return null;
+}
 const LIST_ITEM_LIMIT = 1000;
 const LIST_MAX_ITEMS = 30;
 
@@ -123,6 +143,10 @@ router.patch('/:id', requireAdmin, async (req, res) => {
       if (body[field].trim().length > limit) return res.status(400).json({ error: `${field} must be at most ${limit} characters.` });
       set[field] = body[field].trim();
     }
+
+    const current = await ScholarshipSetting.findOne({ scholarshipId: scholarship.id }).select('opensOn closesOn').lean();
+    const dateError = parseDates(body, set, unset, periodOf(scholarship, current));
+    if (dateError) return res.status(400).json({ error: dateError });
 
     for (const field of LIST_FIELDS) {
       if (body[field] === undefined) continue;
@@ -249,7 +273,8 @@ router.post('/', requireAdmin, async (req, res) => {
     const body = req.body || {};
     const info = {};
     if (typeof body.description === 'string' && body.description.trim()) info.description = body.description.trim().slice(0, TEXT_LIMITS.description);
-    if (typeof body.deadline === 'string' && body.deadline.trim()) info.deadline = body.deadline.trim().slice(0, TEXT_LIMITS.deadline);
+    const dateError = parseDates({ opensOn: body.opensOn, closesOn: body.closesOn }, info, {});
+    if (dateError) return res.status(400).json({ error: dateError });
     if (Array.isArray(body.benefits)) {
       const benefits = body.benefits.filter(b => typeof b === 'string').map(b => b.trim()).filter(Boolean);
       if (benefits.length > 10 || benefits.some(b => b.length > 300)) return res.status(400).json({ error: 'Use at most 10 benefits of 300 characters each.' });

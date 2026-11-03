@@ -31,8 +31,17 @@ const scholarshipSettingSchema = new mongoose.Schema({
   eligibility: listField,
   process: listField,
   submissionNote: { type: String, trim: true, maxlength: 500 },
-  // e.g. the Athletic Scholarship's varsity tryout dates.
+  // Application period, picked as dates (YYYY-MM-DD, Manila): applications
+  // are accepted only between them (utils/scholarshipDates.js). `deadline`
+  // is the older typed text, shown only while no dates are picked.
+  opensOn: String,
+  closesOn: String,
+  // e.g. the Athletic Scholarship's varsity tryouts: a picked date and
+  // time, and where. `schedule` is the older typed text.
   schedule: { type: String, trim: true, maxlength: 300 },
+  scheduleOn: String,
+  scheduleTime: String,
+  scheduleVenue: { type: String, trim: true, maxlength: 150 },
   rules: { type: mongoose.Schema.Types.Mixed, default: undefined },
   customEligibility: listField,
   documentKeys: listField,
@@ -54,7 +63,8 @@ const scholarshipSettingSchema = new mongoose.Schema({
 
 // The fields a client can read and the admin page can edit.
 const EDITABLE_FIELDS = [
-  'status', 'deadline', 'description', 'benefits', 'process', 'submissionNote', 'schedule',
+  'status', 'deadline', 'opensOn', 'closesOn', 'description', 'benefits', 'process', 'submissionNote',
+  'schedule', 'scheduleOn', 'scheduleTime', 'scheduleVenue',
   'rules', 'customEligibility', 'documentKeys', 'customDocuments',
 ];
 // Fixed details of an AdSO-created scholarship (sent with its overrides).
