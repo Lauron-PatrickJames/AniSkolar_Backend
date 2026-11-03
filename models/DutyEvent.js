@@ -5,8 +5,10 @@ const mongoose = require('mongoose');
 // the office first); the office decides whether an event is credited and
 // for how many hours. The credit is the office's call, not the event's
 // length: a 1-hour event can be worth 3 hours (AdSO, Oct 2026). The AdSO
-// enters them; scholars claim the ones they attended and the AdSO approves
-// each claim (DutyLog.eventClaims) before the hours count.
+// enters them and prints the attendance sheet scholars sign at the event;
+// afterwards the AdSO uploads the signed sheets and ticks who attended,
+// which credits them (an Approved DutyLog.eventClaims entry). Scholars
+// no longer claim events themselves (Nov 2026).
 
 const ORGANIZERS = ['Scholarship office', 'COSA'];
 
@@ -18,6 +20,21 @@ const dutyEventSchema = new mongoose.Schema({
   // The duty term the date falls in (utils/dutyHours.js currentTerm).
   academicYear: { type: Number, required: true },
   term: { type: String, required: true },
+  // The signed attendance sheets (utils/gridfs.js), as uploaded.
+  sheets: {
+    type: [new mongoose.Schema({
+      fileId: { type: mongoose.Schema.Types.ObjectId, required: true },
+      filename: String,
+      mimetype: String,
+      size: Number,
+      uploadedBy: String,
+      uploadedAt: { type: Date, default: Date.now },
+    }, { _id: false })],
+    default: [],
+  },
+  // When the AdSO last saved who attended.
+  attendanceSavedAt: Date,
+  attendanceSavedBy: String,
   createdBy: String,
   updatedBy: String,
 }, { timestamps: true });

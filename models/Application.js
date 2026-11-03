@@ -104,6 +104,12 @@ const applicationSchema = new mongoose.Schema({
   evaluationSheet: { type: mongoose.Schema.Types.Mixed },
 
   adminFields: { type: adminFieldsSchema },
+  // What the office recorded while deciding (data/officeForms.js), e.g.
+  // the Heraldo's points or the SDO's discount. Never shown to students.
+  officeAssessment: { type: mongoose.Schema.Types.Mixed },
+  // Added by the office itself, without an application (directAward
+  // scholarships, e.g. the SDO's from its tryouts).
+  awardedDirectly: Boolean,
 
   // SFAG only: the tuition discount the student applies for (chosen on the
   // form), and the one granted (100 / 75 / 50 / 25). The AdSO approves the

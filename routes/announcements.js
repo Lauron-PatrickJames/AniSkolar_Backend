@@ -4,15 +4,23 @@ const multer = require('multer');
 const { ObjectId } = require('mongodb');
 const Announcement = require('../models/Announcement');
 const Student = require('../models/Student');
-const { requireAdso } = require('../middleware/requireAdmin');
+const { requireAdso, requireAdmin } = require('../middleware/requireAdmin');
+const { requireStudent } = require('../middleware/requireStudent');
+const DutyLog = require('../models/DutyLog');
+const { currentTerm } = require('../utils/dutyHours');
+const { norm } = require('../utils/offices');
 const { announcementImageUpload } = require('../middleware/uploadConfig');
 const { putFile, openFile, readFile, deleteFile } = require('../utils/gridfs');
 const facebook = require('../services/facebook');
 const { findScholarship } = require('../data/scholarships');
 
-// Announcements are managed by the AdSO only (requireAdso = requireAdmin +
-// office ADSO). POLCA / Alumni admins and students get 403. The published
-// feed (GET /feed) and announcement images are readable by anyone.
+// Each scholarship office manages its own announcements (requireAdmin):
+// the AdSO's go to everyone and can be cross-posted to the AdSO's Facebook
+// Page; another office's are about its own scholarships, and it can email
+// only their applicants or scholars. Duty offices post to their assigned
+// scholars from the Office portal (routes/office.js); those are left out
+// of the public feed and served by GET /feed/duty. The published feed
+// (GET /feed) and announcement images are readable by anyone.
 //
 // Mounted at both /api/announcements and /api/admin/announcements (see
 // server.js), so the Facebook retry endpoint is also reachable at
@@ -231,7 +239,7 @@ function parseEmailAudience(raw, scholarshipId) {
   return { value: raw };
 }
 
-const { parseEmailTarget, previewTarget } = require('../utils/emailTarget');
+const { parseEmailTarget, previewTarget, targetOf } = require('../utils/emailTarget');
 
 // The email audience from a request: emailTarget (the editor), or the older
 // emailAudience (the scholarship status dialog). Returns { target } (null
@@ -306,14 +314,37 @@ async function publishDueAnnouncements(now = new Date()) {
   }
 }
 
+// --- Ownership ----------------------------------------------------------------
+
+const ownOffice = req => req.adminUser.office; // 'LSO' = the AdSO
+const isAdsoUser = req => ownOffice(req) === 'LSO';
+const ownedFilter = req => (isAdsoUser(req)
+  ? { office: { $in: [null, 'LSO'] }, dutyOffice: null }
+  : { office: ownOffice(req), dutyOffice: null });
+const owns = (req, doc) => !doc.dutyOffice && (doc.office || 'LSO') === ownOffice(req);
+
+// What only the AdSO may do; null when allowed. Other offices post about
+// their own scholarships, without Facebook, emailing only their own
+// scholarships' applicants or scholars.
+function officeRuleError(req, { scholarshipId, fbEnabled, emailTarget }) {
+  if (isAdsoUser(req)) return null;
+  if (scholarshipId && findScholarship(scholarshipId)?.office !== ownOffice(req)) return 'Choose one of your own scholarships.';
+  if (fbEnabled) return 'Only the AdSO posts to the Facebook Page.';
+  if (emailTarget) {
+    const own = emailTarget.scholarshipIds?.length && emailTarget.scholarshipIds.every(id => findScholarship(id)?.office === ownOffice(req));
+    if (!['applicants', 'scholars'].includes(emailTarget.mode) || !own) return 'You can email the applicants or scholars of your own scholarships.';
+  }
+  return null;
+}
+
 // --- Routes -----------------------------------------------------------------
 
 // GET /api/announcements
 // Admin view: everything (draft + published), pinned first, newest first.
 // Optional ?status=draft|scheduled|published filter.
-router.get('/', requireAdso, async (req, res) => {
+router.get('/', requireAdmin, async (req, res) => {
   try {
-    const filter = {};
+    const filter = ownedFilter(req);
     if (Announcement.STATUSES.includes(req.query.status)) {
       filter.status = req.query.status;
     }
@@ -331,9 +362,23 @@ router.get('/feed', async (req, res) => {
   try {
     // Don't wait for the timer: anything due shows right away.
     await publishDueAnnouncements().catch(err => console.error('Publishing scheduled announcements failed:', err));
-    const docs = await Announcement.find({ status: 'published' }).sort({ isPinned: -1, publishedAt: -1 });
+    const docs = await Announcement.find({ status: 'published', dutyOffice: null }).sort({ isPinned: -1, publishedAt: -1 });
     res.json({ announcements: docs.map(d => d.toFeedShape()) });
   } catch (err) {
+    res.status(500).json({ error: 'Failed to load announcements.' });
+  }
+});
+
+// GET /api/announcements/feed/duty — signed-in scholars: what the duty
+// office they're assigned to this term posted.
+router.get('/feed/duty', requireStudent, async (req, res) => {
+  try {
+    const log = await DutyLog.findOne({ studentNumber: req.studentNumber, ...currentTerm() }).select('officeAssigned').lean();
+    if (!log?.officeAssigned) return res.json({ announcements: [] });
+    const docs = await Announcement.find({ status: 'published', dutyOffice: { $ne: null } }).sort({ publishedAt: -1 }).limit(100);
+    res.json({ announcements: docs.filter(d => norm(d.dutyOffice) === norm(log.officeAssigned)).map(d => d.toFeedShape()) });
+  } catch (err) {
+    console.error('Duty announcements error:', err);
     res.status(500).json({ error: 'Failed to load announcements.' });
   }
 });
@@ -372,7 +417,7 @@ router.get('/:id/image', (req, res) => sendImage(req, res, null));
 // date-time, for 'scheduled'), fbEnabled ("Also post to Facebook").
 // Facebook is only posted to when the announcement is published — for a
 // scheduled one, when its time comes.
-router.post('/', requireAdso, withImageUpload, async (req, res) => {
+router.post('/', requireAdmin, withImageUpload, async (req, res) => {
   const newImages = [];
   try {
     const { title, description, content, category, status } = req.body;
@@ -395,6 +440,7 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
       content,
       category: category || 'General',
       scholarshipId: related.value,
+      office: ownOffice(req),
       isPinned: parseBool(req.body.isPinned) ?? false,
       status: status === 'scheduled' ? 'scheduled' : willPublish ? 'published' : 'draft',
       publishedAt: willPublish ? new Date() : null,
@@ -410,6 +456,11 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
       return res.status(400).json({ error: audience.error });
     }
     if (audience.target) doc.emailTarget = audience.target;
+    const ruleError = officeRuleError(req, { scholarshipId: doc.scholarshipId, fbEnabled: doc.fbEnabled, emailTarget: doc.emailEnabled ? targetOf(doc) : null });
+    if (ruleError) {
+      await discardUnsaved(newImages);
+      return res.status(403).json({ error: ruleError });
+    }
 
     const validationError = await doc.validate().then(() => null, err => err);
     if (validationError) {
@@ -436,13 +487,13 @@ router.post('/', requireAdso, withImageUpload, async (req, res) => {
 // announcement can't be scheduled. The Facebook post follows:
 // text edits update it, changed images recreate it, unpublishing or turning
 // fbEnabled off deletes it.
-router.patch('/:id', requireAdso, withImageUpload, async (req, res) => {
+router.patch('/:id', requireAdmin, withImageUpload, async (req, res) => {
   const newImages = [];
   try {
     const objectId = toObjectId(req.params.id);
     if (!objectId) return res.status(400).json({ error: 'Invalid announcement id.' });
     const existing = await Announcement.findById(objectId);
-    if (!existing) return res.status(404).json({ error: 'Announcement not found.' });
+    if (!existing || !owns(req, existing)) return res.status(404).json({ error: 'Announcement not found.' });
 
     const { title, description, content, category, status } = req.body;
     if (title !== undefined) existing.title = title;
@@ -490,6 +541,9 @@ router.patch('/:id', requireAdso, withImageUpload, async (req, res) => {
         existing.publishedAt = new Date();
       }
     }
+
+    const ruleError = officeRuleError(req, { scholarshipId: existing.scholarshipId, fbEnabled: existing.fbEnabled, emailTarget: existing.emailEnabled && !started ? targetOf(existing) : null });
+    if (ruleError) return res.status(403).json({ error: ruleError });
 
     const keep = parseKeepImageIds(req.body.keepImageIds);
     if (keep.error) return res.status(400).json({ error: keep.error });
@@ -547,10 +601,12 @@ router.post('/:id/facebook/retry', requireAdso, async (req, res) => {
 
 // POST /api/announcements/email/preview  { emailTarget } → { count, sample, unknown }
 // How many students an email audience reaches, for the editor.
-router.post('/email/preview', requireAdso, async (req, res) => {
+router.post('/email/preview', requireAdmin, async (req, res) => {
   try {
     const t = parseEmailTarget(req.body?.emailTarget);
     if (t.error) return res.status(400).json({ error: t.error });
+    const ruleError = officeRuleError(req, { emailTarget: t.value });
+    if (ruleError) return res.status(403).json({ error: ruleError });
     res.json(await previewTarget(t.value));
   } catch (err) {
     console.error('Email preview error:', err);
@@ -576,12 +632,12 @@ router.get('/email/students', requireAdso, async (req, res) => {
 
 // POST /api/announcements/:id/email/retry — sends a failed announcement
 // email again, from where it stopped.
-router.post('/:id/email/retry', requireAdso, async (req, res) => {
+router.post('/:id/email/retry', requireAdmin, async (req, res) => {
   try {
     const objectId = toObjectId(req.params.id);
     if (!objectId) return res.status(400).json({ error: 'Invalid announcement id.' });
     const doc = await Announcement.findOneAndUpdate(
-      { _id: objectId, emailStatus: 'failed' },
+      { _id: objectId, emailStatus: 'failed', ...ownedFilter(req) },
       { $set: { emailStatus: 'queued', emailError: null, emailQueuedAt: new Date() } },
       { returnDocument: 'after' }
     );
@@ -598,12 +654,12 @@ router.post('/:id/email/retry', requireAdso, async (req, res) => {
 // Deletes the announcement, its images, and its Facebook post. If Facebook
 // can't delete the post, the announcement is still deleted and the
 // response carries facebookWarning so the admin can remove it by hand.
-router.delete('/:id', requireAdso, async (req, res) => {
+router.delete('/:id', requireAdmin, async (req, res) => {
   try {
     const objectId = toObjectId(req.params.id);
     if (!objectId) return res.status(400).json({ error: 'Invalid announcement id.' });
     const doc = await Announcement.findById(objectId);
-    if (!doc) return res.status(404).json({ error: 'Announcement not found.' });
+    if (!doc || !owns(req, doc)) return res.status(404).json({ error: 'Announcement not found.' });
 
     let facebookWarning = null;
     if (doc.fbPostId) {

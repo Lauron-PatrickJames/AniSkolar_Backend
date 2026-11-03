@@ -10,12 +10,15 @@ const { openFile, storeFilesInGridFS } = require('../utils/gridfs');
 const Application = require('../models/Application');
 const ApplicationDraft = require('../models/ApplicationDraft');
 const ScholarshipSetting = require('../models/ScholarshipSetting');
+const { windowError } = require('../utils/scholarshipDates');
 const Student = require('../models/Student');
 const { findScholarship, acceptsOnlineApplications } = require('../data/scholarships');
 const { officeFilter, scopedOffice, partnerLock } = require('../utils/officeScope');
 const { academicYearStartExpr, inSfagApplicationWindow } = require('../utils/academicYear');
 const { nextReferenceCode } = require('../utils/referenceCode');
 const { otherScholarshipsHeld } = require('../utils/exclusivity');
+const { queueEmails, processOutbox } = require('../utils/outbox');
+const { renderEmail } = require('../utils/emailTemplate');
 const { slotsFull } = require('../utils/collegeSlots');
 const {
   isGrantFormType,
@@ -63,7 +66,23 @@ function joinNameParts(partsExpr) {
 // Office-use data that applicants never see.
 const SFAG_WINDOW_MESSAGE = 'SFAG applications are only accepted in June and July, before the 1st semester enrollment. The rest of the year is for renewals only.';
 
-const STUDENT_HIDDEN_FIELDS = '-adminFields -internalNotes -sfagPercentageSetBy';
+const STUDENT_HIDDEN_FIELDS = '-adminFields -officeAssessment -internalNotes -sfagPercentageSetBy';
+const { OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment } = require('../data/officeForms');
+
+// A standard-form submission's office answers (data/officeForms.js) and
+// the documents they call for, checked before any file is stored.
+// Returns { value } (the answers, or undefined) or { error }.
+function checkOfficeStep(scholarshipId, standardInfo, labels) {
+  if (!OFFICE_FORMS[scholarshipId]) return { value: undefined };
+  let info;
+  try { info = JSON.parse(standardInfo || 'null'); } catch { return { error: 'Invalid form data.' }; }
+  const answers = parseOfficeAnswers(scholarshipId, info?.officeAnswers);
+  if (answers.error) return answers;
+  const docs = officeDocuments(scholarshipId, answers.value);
+  const missing = docs?.find(d => !labels.includes(d));
+  if (missing) return { error: `Upload the ${missing}.` };
+  return answers;
+}
 
 // The applicant's name on an application always comes from their Student
 // record (first and last from the university account, middle from the
@@ -106,6 +125,7 @@ async function stampStudentNames(studentNumber, application) {
 function toStudentView(application) {
   const obj = application.toObject ? application.toObject() : { ...application };
   delete obj.adminFields;
+  delete obj.officeAssessment;
   delete obj.internalNotes;
   return obj;
 }
@@ -129,6 +149,151 @@ function validateGrantSubmission(scholarship, body, presentSlotKeys) {
   }
   return { sections };
 }
+
+// --- Scholars an office picks itself -------------------------------------------
+// POST /api/applications/direct-award — for scholarships without an
+// application (directAward in data/scholarships.js, e.g. the SDO's, chosen
+// from the tryouts): the office adds the scholar with what it decided on
+// (data/officeForms.js answers and assessment) and the coach's document.
+// Multipart: scholarshipId, studentNumber, officeAnswers (JSON),
+// assessment (JSON), directorApproved 'true', note, acknowledgeOtherScholarship,
+// and one "documents" file. The scholar is approved at once; the AdSO sees
+// them like any approved scholar. A player who hasn't signed in to
+// AniSkolar yet is added by student number with firstName, lastName and
+// their school email: applications belong to the student number, so the
+// scholarship is theirs the first time they sign in. Either way they're
+// emailed.
+// GET /api/applications/direct-award/students?q= — students to pick from.
+const directAwardScholarship = (adminUser, scholarshipId) => {
+  const scholarship = findScholarship(scholarshipId);
+  if (!scholarship?.directAward) return null;
+  return (scopedOffice(adminUser) ?? 'LSO') === scholarship.office ? scholarship : null;
+};
+
+router.get('/direct-award/students', requireAdmin, async (req, res) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (q.length < 2) return res.json({ students: [] });
+    const safe = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const students = await Student.find({ $or: [{ studentNumber: { $regex: `^${safe}` } }, { name: { $regex: safe, $options: 'i' } }] })
+      .select('studentNumber name programCode college yearLevel').limit(10).lean();
+    res.json({ students: students.map(({ _id, ...s }) => s) });
+  } catch (err) {
+    console.error('Direct award student search error:', err);
+    res.status(500).json({ error: 'Failed to search students.' });
+  }
+});
+
+router.post('/direct-award', requireAdmin, (req, res) => {
+  uploadDocs(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'The file must be under 10MB.' : err.message });
+    try {
+      const scholarship = directAwardScholarship(req.adminUser, req.body.scholarshipId);
+      if (!scholarship) return res.status(403).json({ error: 'Only the office that handles this scholarship can add its scholars.' });
+      const studentNumber = typeof req.body.studentNumber === 'string' ? req.body.studentNumber.trim() : '';
+      if (!/^\d{9}$/.test(studentNumber)) return res.status(400).json({ error: 'Enter the 9-digit student number.' });
+      let student = await Student.findOne({ studentNumber }).lean();
+      if (!student) {
+        // Not signed in yet: who they are, as the SDO typed it.
+        const text = v => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, 100) : '');
+        const firstName = text(req.body.firstName);
+        const lastName = text(req.body.lastName);
+        const email = text(req.body.email).toLowerCase();
+        if (!firstName || !lastName) return res.status(400).json({ error: 'Enter the player’s first and last name.' });
+        if (!/^[^\s@]+@dlsud\.edu\.ph$/.test(email)) return res.status(400).json({ error: 'Enter the player’s DLSU-D email (@dlsud.edu.ph).' });
+        student = { studentNumber, firstName, lastName, middleName: '', name: `${firstName} ${lastName}`.toUpperCase(), email, pending: true };
+      }
+      if (req.body.directorApproved !== 'true') return res.status(400).json({ error: 'Confirm the SDO Director approved it.' });
+
+      let rawAnswers; let rawAssessment;
+      try {
+        rawAnswers = JSON.parse(req.body.officeAnswers || '{}');
+        rawAssessment = JSON.parse(req.body.assessment || '{}');
+      } catch { return res.status(400).json({ error: 'Invalid form data.' }); }
+      const answers = parseOfficeAnswers(scholarship.id, rawAnswers);
+      if (answers.error) return res.status(400).json({ error: 'Fill in the player’s details.' });
+      const assessment = parseAssessment(scholarship.id, rawAssessment);
+      if (assessment.error) return res.status(400).json({ error: assessment.error });
+      const [docLabel] = officeDocuments(scholarship.id, answers.value) ?? [];
+      const files = req.files || [];
+      if (files.length !== 1) return res.status(400).json({ error: `Attach the ${docLabel ?? 'document'} (one JPG).` });
+
+      if (await Application.exists({ studentNumber, scholarshipId: scholarship.id, status: 'Approved', endedAt: null })) {
+        return res.status(409).json({ error: `${student.name || studentNumber} is already a scholar of the ${scholarship.name}.` });
+      }
+      if (req.body.acknowledgeOtherScholarship !== 'true') {
+        const others = await otherScholarshipsHeld(studentNumber, scholarship.id);
+        if (others.length) {
+          const names = others.map(o => o.scholarshipName);
+          return res.status(409).json({ code: 'holds_other_scholarship', held: names, error: `This student already holds the ${names.join(' and the ')}. Only one internally funded scholarship can be credited; if you add this one, the student chooses which to keep (usually the bigger grant).` });
+        }
+      }
+
+      const documents = await storeFilesInGridFS(files, [docLabel]);
+      const now = new Date();
+      const by = req.adminUser.email;
+      const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 2000) : '';
+      const application = await Application.create({
+        studentNumber,
+        scholarshipId: scholarship.id,
+        scholarshipName: scholarship.name,
+        office: scholarship.office,
+        applicationFormType: 'standard',
+        documents,
+        referenceCode: await nextReferenceCode(scholarship),
+        standardInfo: {
+          firstName: student.firstName || '', middleName: student.middleName || '', lastName: student.lastName || '',
+          email: student.email || '', phone: student.mobileNumber || '', studentNumber,
+          program: student.programCode || '', yearLevel: student.yearLevel || '',
+          officeAnswers: answers.value,
+        },
+        officeAssessment: { ...assessment.value, directorApproved: true, updatedBy: by, updatedAt: now },
+        awardedDirectly: true,
+        status: 'Approved',
+        decisionOffice: scholarship.office,
+        reviewNote: note || undefined,
+        reviewedBy: by,
+        reviewedAt: now,
+        forwardedAt: now,
+        forwardedBy: by,
+        history: [
+          { status: 'Approved', note: note || 'Picked from the varsity tryouts; approved by the SDO Director.', changedBy: by, changedByName: req.adminUser.name, changedByOffice: req.adminUser.office, changedAt: now },
+          { status: 'Forwarded to LSO', changedBy: 'system', changedByOffice: scholarship.office, changedAt: now },
+        ],
+      });
+      if (!student.pending) {
+        await stampStudentNames(studentNumber, application);
+        application.markModified('standardInfo');
+        await application.save();
+      }
+      if (student.email) {
+        const appUrl = process.env.APP_URL || (process.env.FRONTEND_ORIGINS || '').split(',')[0].trim() || 'http://localhost:3000';
+        const office = require('../data/offices').OFFICE_NAMES[scholarship.office] ?? 'the scholarship office';
+        const { html, text } = renderEmail({
+          heading: `You're a ${scholarship.name} scholar`,
+          intro: `The ${office.replace(/^the /i, '')} added you as a scholar.`,
+          body: [
+            `Hi ${student.firstName || 'there'},`,
+            '',
+            `You've been granted the ${scholarship.name}${note ? `:\n\n${note}` : '.'}`,
+            '',
+            student.pending
+              ? 'Sign in to AniSkolar with your DLSU-D Microsoft account to see it under My Scholarship.'
+              : 'You can see it in AniSkolar under My Scholarship.',
+          ].join('\n'),
+          button: { url: appUrl, label: 'Open AniSkolar' },
+        });
+        queueEmails([{ key: `direct-award:${application._id}`, kind: 'directAward', priority: 1, to: student.email, subject: `AniSkolar: you're a ${scholarship.name} scholar`, html, text }])
+          .then(() => processOutbox())
+          .catch(e => console.error('Direct award email failed:', e));
+      }
+      res.status(201).json({ application, pendingAccount: !!student.pending });
+    } catch (e) {
+      console.error('Direct award error:', e);
+      res.status(500).json({ error: 'Failed to add the scholar.' });
+    }
+  });
+});
 
 // The applicant is always the signed-in student (requireStudent); a
 // studentNumber in the body is ignored.
@@ -170,14 +335,18 @@ router.post('/', requireStudent, (req, res) => {
         return res.status(400).json({ error: 'Unknown scholarship.' });
       }
       if (!acceptsOnlineApplications(scholarship)) {
-        return res.status(400).json({ error: 'This scholarship doesn\'t take online applications. Contact the AdSO for how it is awarded.' });
+        const by = require('../data/offices').OFFICE_NAMES[scholarship.office] ?? 'the AdSO';
+        return res.status(400).json({ error: `This scholarship doesn't take online applications. Ask the ${by.replace(/^the /i, '')} how it is awarded.` });
       }
 
       // The AdSO can close a scholarship from the admin Scholarships page.
-      const setting = await ScholarshipSetting.findOne({ scholarshipId }).select('status').lean();
+      const setting = await ScholarshipSetting.findOne({ scholarshipId }).select('status opensOn closesOn').lean();
       if ((setting?.status ?? scholarship.defaultStatus) === 'Closed') {
         return res.status(400).json({ error: 'This scholarship is closed and is no longer accepting applications.' });
       }
+      // Only between its opening and closing dates.
+      const outsidePeriod = windowError(scholarship, setting);
+      if (outsidePeriod) return res.status(400).json({ error: outsidePeriod });
 
       // The SFAG takes applications in June and July only (before the 1st
       // semester enrollment); the rest of the year is for renewals.
@@ -231,6 +400,8 @@ router.post('/', requireStudent, (req, res) => {
       if (formType === 'sfag' && !parseGrant(req.body.sfagPercentageRequested)) {
         return res.status(400).json({ error: 'Choose the grant percentage you’re applying for (100, 75, 50 or 25%).' });
       }
+      const officeStep = !isGrant && formType !== 'sfag' ? checkOfficeStep(scholarship.id, standardInfo, labels) : { value: undefined };
+      if (officeStep.error) return res.status(400).json({ error: officeStep.error });
 
       let documents;
       try {
@@ -270,7 +441,7 @@ router.post('/', requireStudent, (req, res) => {
         if (!standardInfo) {
           return res.status(400).json({ error: 'Missing personal/academic profile.' });
         }
-        applicationData.standardInfo = JSON.parse(standardInfo);
+        applicationData.standardInfo = { ...JSON.parse(standardInfo), ...(officeStep.value ? { officeAnswers: officeStep.value } : {}) };
       }
 
       await stampStudentNames(studentNumber, applicationData);
@@ -377,6 +548,10 @@ router.patch('/:id', requireStudent, (req, res) => {
       if (req.body.sfagPercentageRequested !== undefined && !parseGrant(req.body.sfagPercentageRequested)) {
         return res.status(400).json({ error: 'Choose the grant percentage you’re applying for (100, 75, 50 or 25%).' });
       }
+      // Office answers again; documents already on file count.
+      const onFile = [...existing.documents.map(d => d.docType), ...labels];
+      const officeStep = !isGrant && standardInfo ? checkOfficeStep(existing.scholarshipId, standardInfo, onFile) : { value: undefined };
+      if (officeStep.error) return res.status(400).json({ error: officeStep.error });
 
       // Upload any newly-selected replacement files into GridFS, same as POST.
       let newDocs = [];
@@ -413,7 +588,7 @@ router.patch('/:id', requireStudent, (req, res) => {
         if (assetsExpenses) existing.assetsExpenses = JSON.parse(assetsExpenses);
         if (agreement) existing.agreement = JSON.parse(agreement);
       } else if (standardInfo) {
-        existing.standardInfo = JSON.parse(standardInfo);
+        existing.standardInfo = { ...JSON.parse(standardInfo), ...(officeStep.value ? { officeAnswers: officeStep.value } : {}) };
       }
 
       const names = { standardInfo: existing.standardInfo, personalInfo: existing.personalInfo };
@@ -1078,6 +1253,30 @@ router.patch('/:id/end', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('End scholarship error:', err);
     res.status(500).json({ error: 'Failed to save.' });
+  }
+});
+
+// PATCH /api/applications/:id/office-assessment — the office that decides
+// the scholarship records what its decision rests on (data/officeForms.js):
+// the Heraldo's points, Vicissitude's rating, the ROTC amount, the USG's
+// on-site schedule, the SDO's discount. Fields sent empty are cleared.
+router.patch('/:id/office-assessment', requireAdmin, async (req, res) => {
+  try {
+    let objectId;
+    try { objectId = new ObjectId(req.params.id); } catch { return res.status(400).json({ error: 'Invalid application id.' }); }
+    const application = await Application.findOne({ _id: objectId, ...officeFilter(req.adminUser) });
+    if (!application) return res.status(404).json({ error: 'Application not found.' });
+    const locked = partnerLock(req.adminUser, application);
+    if (locked) return res.status(403).json({ error: locked });
+    const parsed = parseAssessment(application.scholarshipId, req.body?.assessment);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    application.officeAssessment = { ...parsed.value, updatedBy: req.adminUser.email || req.adminUser.id, updatedAt: new Date() };
+    application.markModified('officeAssessment');
+    await application.save();
+    res.json({ officeAssessment: application.officeAssessment });
+  } catch (err) {
+    console.error('Office assessment error:', err);
+    res.status(500).json({ error: 'Failed to save the assessment.' });
   }
 });
 

@@ -1,4 +1,5 @@
 const express = require('express');
+const { isDate, longDate } = require('../utils/scholarshipDates');
 const { renewalDocuments } = require('../models/RenewalPeriod');
 const router = express.Router();
 const multer = require('multer');
@@ -296,7 +297,11 @@ function parsePeriodBody(body, { partial }) {
     out.term = body.term;
   }
   if (body.open !== undefined) out.open = body.open === true;
-  if (body.deadline !== undefined) out.deadline = typeof body.deadline === 'string' ? body.deadline.trim().slice(0, 200) : '';
+  if (body.deadline !== undefined) {
+    // Picked from a calendar (YYYY-MM-DD), or '' for none.
+    if (body.deadline && !isDate(body.deadline)) return { error: 'Pick the deadline from the calendar.' };
+    out.deadline = body.deadline || '';
+  }
   if (body.notes !== undefined) out.notes = typeof body.notes === 'string' ? body.notes.trim().slice(0, 1000) : '';
   if (body.minGpa !== undefined) {
     if (body.minGpa === null || body.minGpa === '') out.minGpa = null;
@@ -419,7 +424,7 @@ async function notifyOfficeHeads(period) {
   const email = renderEmail({
     heading: 'Scholar evaluations are open',
     intro: `Please evaluate the ${name} scholars who rendered duty in your office during the ${prev.term}, A.Y. ${prev.academicYear}–${prev.academicYear + 1}.`,
-    body: `Sign in to AniSkolar with your school email and open Evaluations. Each scholar is rated 1–5 on the usual items; it takes a few minutes per scholar.${period.deadline ? `\n\nRenewal deadline: ${period.deadline}` : ''}`,
+    body: `Sign in to AniSkolar with your school email and open Evaluations. Each scholar is rated 1–5 on the usual items; it takes a few minutes per scholar.${period.deadline ? `\n\nRenewal deadline: ${isDate(period.deadline) ? longDate(period.deadline) : period.deadline}` : ''}`,
     button: { url: appUrl, label: 'Open AniSkolar' },
   });
   for (let i = 0; i < heads.length; i += 50) {
