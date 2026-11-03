@@ -39,7 +39,7 @@
 //     the frontend) are not listed here. `when` makes a slot conditional
 //     on an answer in the submitted form.
 
-const OFFICES = ['LSO', 'POLCA', 'ALUMNI'];
+const { OFFICE_CODES: OFFICES } = require('./offices');
 
 const ALUMNI_INSTITUTIONS = ['DLSU-EAC', 'DLSU-Aguinaldo', 'DLSU-Dasmariñas'];
 // 1st and 2nd degree of consanguinity only.
@@ -109,12 +109,14 @@ const SCHOLARSHIPS = [
   },
   { id: 's5', name: 'Academic Scholarship', office: 'LSO', applicationMode: 'info' },
   { id: 's6', name: 'Enhanced Brother President Scholarship Program (EBPSP)', office: 'LSO', formType: 'standard', referenceCode: 'EBPSP' },
-  { id: 's7', name: 'Athletic Scholarship', office: 'LSO', applicationMode: 'info' },
-  { id: 's8', name: 'Vicissitude Scholarship Program', office: 'LSO', applicationMode: 'info' },
+  // Run by their own offices (they open them, decide, renew); the AdSO sees
+  // the approved scholars. They start closed until the office opens them.
+  { id: 's7', defaultStatus: 'Closed', name: 'Athletic Scholarship', office: 'SDO', formType: 'standard', referenceCode: 'ATH' },
+  { id: 's8', defaultStatus: 'Closed', name: 'Vicissitude Scholarship Program', office: 'VICISSITUDE', formType: 'standard', referenceCode: 'VIC' },
   // s9 (Performing Arts Group) was removed: PAG declined to partner with AniSkolar.
-  { id: 's10', name: '267th NROTC Scholarship', office: 'LSO', applicationMode: 'info' },
-  // The USG's own grant, applied for through the USG's form.
-  { id: 's11', name: 'USG Student Financial Aid Grant', office: 'LSO', applicationMode: 'info' },
+  { id: 's10', defaultStatus: 'Closed', name: '267th NROTC Scholarship', office: 'ROTC', formType: 'standard', referenceCode: 'ROTC' },
+  { id: 's11', defaultStatus: 'Closed', name: 'USG Student Financial Aid Grant', office: 'USG', formType: 'standard', referenceCode: 'USGF' },
+  { id: 's12', defaultStatus: 'Closed', name: 'Heraldo Filipino Scholarship', office: 'HERALDO', formType: 'standard', referenceCode: 'HF' },
 ];
 
 // Built-in scholarships, then the ones the AdSO created (standard form;

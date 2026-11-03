@@ -21,7 +21,7 @@ const { getAuth, clerkClient } = require('@clerk/express');
 // Clerk metadata value -> office code stored on applications. The AdSO is
 // stored as 'LSO' (its code from before the rename), so existing records
 // need no migration.
-const ADMIN_OFFICES = { ADSO: 'LSO', POLCA: 'POLCA', ALUMNI: 'ALUMNI' };
+const { CLERK_OFFICES: ADMIN_OFFICES } = require('../data/offices');
 async function requireAdmin(req, res, next) {
   try {
     const { userId } = getAuth(req);
@@ -42,7 +42,7 @@ async function requireAdmin(req, res, next) {
     const office = ADMIN_OFFICES[requested];
     if (!office) {
       return res.status(403).json({
-        error: 'This admin account isn\'t assigned to an office. Ask a system administrator to set its office (ADSO, POLCA or ALUMNI) in Clerk.',
+        error: 'This admin account isn\'t assigned to an office. Ask a system administrator to set its office (e.g. ADSO, POLCA, SDO, USG) in Clerk.',
       });
     }
 

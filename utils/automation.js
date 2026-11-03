@@ -1,10 +1,9 @@
 const AutomationSetting = require('../models/AutomationSetting');
-const { RENEWAL_DOCUMENTS } = require('../models/RenewalPeriod');
+const { renewalDocuments } = require('../models/RenewalPeriod');
 const Application = require('../models/Application');
 const ApplicationDraft = require('../models/ApplicationDraft');
 const DutyLog = require('../models/DutyLog');
 const Message = require('../models/Message');
-const OfficeRequest = require('../models/OfficeRequest');
 const OutboxEmail = require('../models/OutboxEmail');
 const Renewal = require('../models/Renewal');
 const RenewalPeriod = require('../models/RenewalPeriod');
@@ -34,11 +33,6 @@ const { queueEmails } = require('./outbox');
 //                        application deadline, to scholars who haven't
 //                        submitted / students with an unsent draft; and
 //                        3 days after "Needs Revision" if nothing changed.
-//   adsoDigest           daily: one summary email to the AdSO staff listed.
-//   termRollover         daily in a term's first 8 weeks: SFAG scholars
-//                        without an office get one (last term's office if
-//                        it has room, else at random by the office slots),
-//                        and they and the office heads are emailed.
 
 const TZ = 'Asia/Manila';
 // Weeks scholars have to finish their hours, for "on track" (a semester is
@@ -242,7 +236,7 @@ async function deadlineReminders({ now }) {
         subject: `AniSkolar: renew your ${name} by ${longDate(deadline)}`,
         heading: `${left === 1 ? 'Tomorrow' : 'In 3 days'}: ${name} renewal deadline`,
         intro: `You haven't submitted your renewal for the ${period.term}, A.Y. ${period.academicYear}–${period.academicYear + 1}.`,
-        body: [hi(students.get(sn)), '', `The deadline is ${longDate(deadline)}. Open Renewals in AniSkolar to submit your grades:`, ...RENEWAL_DOCUMENTS.map(r => `- ${r}`), '', "If you're not continuing (OJT, graduating, transferring), say so in the same form so the office knows."].join('\n'),
+        body: [hi(students.get(sn)), '', `The deadline is ${longDate(deadline)}. Open Renewals in AniSkolar to submit:`, ...renewalDocuments(period).map(r => `- ${r}`), '', "If you're not continuing (OJT, graduating, transferring), say so in the same form so the office knows."].join('\n'),
       }));
     }
   }
@@ -302,183 +296,10 @@ async function deadlineReminders({ now }) {
   return { emails, summary: total ? `${counts.renewal} renewal, ${counts.draft} draft and ${counts.revision} revision reminders.` : 'Nothing due today.' };
 }
 
-// The numbers in the AdSO's morning summary.
-async function digestCounts(now) {
-  const lso = officeFilter({ office: 'LSO' });
-  const term = currentTerm(now);
-  const [newApps, toReview, unread, requests, renewals, claims, failed, holders, assigned] = await Promise.all([
-    Application.countDocuments({ ...lso, createdAt: { $gte: new Date(now.getTime() - 24 * 3600_000) } }),
-    Application.countDocuments({ ...lso, status: 'Under Evaluation' }),
-    Message.countDocuments({ from: { $in: ['student', 'office'] }, readAt: null }),
-    OfficeRequest.countDocuments({ status: 'open' }),
-    Renewal.countDocuments({ status: 'Under Evaluation' }),
-    DutyLog.aggregate([{ $match: { ...term, 'eventClaims.status': 'Pending' } }, { $unwind: '$eventClaims' }, { $match: { 'eventClaims.status': 'Pending' } }, { $count: 'n' }]),
-    OutboxEmail.countDocuments({ status: 'failed', updatedAt: { $gte: new Date(now.getTime() - 24 * 3600_000) } }),
-    findCurrentHolders({ scholarshipId: SFAG_ID, ...term }),
-    DutyLog.distinct('studentNumber', { ...term, officeAssigned: { $nin: [null, ''] } }),
-  ]);
-  const withOffice = new Set(assigned);
-  return {
-    newApps, toReview, unread, requests, renewals,
-    claims: claims[0]?.n ?? 0,
-    failed,
-    noOffice: [...holders].filter(sn => !withOffice.has(sn)).length,
-  };
-}
-
-async function adsoDigest({ now, settings }) {
-  const to = (settings.adsoDigestTo || []).filter(Boolean);
-  if (!to.length) return { emails: [], summary: 'No one to send it to: add the AdSO emails.' };
-  const c = await digestCounts(now);
-  const lines = [
-    c.newApps && `- ${plural(c.newApps, 'new application')} since yesterday`,
-    c.toReview && `- ${plural(c.toReview, 'application')} under evaluation`,
-    c.renewals && `- ${plural(c.renewals, 'renewal')} to decide`,
-    c.unread && `- ${plural(c.unread, 'unread message')}`,
-    c.requests && `- ${plural(c.requests, 'open office request')}`,
-    c.claims && `- ${plural(c.claims, 'event claim')} to approve`,
-    c.noOffice && `- ${plural(c.noOffice, 'SFAG scholar')} without a duty office`,
-    c.failed && `- ${plural(c.failed, 'email')} AniSkolar couldn't send in the last day (see Automation)`,
-  ].filter(Boolean);
-  if (!lines.length) return { emails: [], summary: 'Nothing waiting, so no summary was sent.', details: c };
-  const today = todayInManila(now);
-  const emails = to.map(address => email({
-    key: `digest:${today}:${address}`,
-    kind: 'adsoDigest',
-    to: address,
-    subject: `AniSkolar today: ${lines.length} ${lines.length === 1 ? 'thing' : 'things'} waiting`,
-    heading: `Good morning! Here's AniSkolar for ${longDate(today)}`,
-    body: lines.join('\n'),
-  }));
-  return { emails, summary: `${lines.length} items in the summary.`, details: c };
-}
-
-// Deals scholars into offices' free slots at random, round by round, like
-// Random assign on the Duty hours page.
-function deal(scholars, free) {
-  const queue = shuffled(scholars);
-  const left = new Map(free);
-  const result = new Map();
-  while (queue.length) {
-    const open = shuffled([...left.entries()].filter(([, n]) => n > 0).map(([office]) => office));
-    if (!open.length) break;
-    for (const office of open) {
-      const sn = queue.shift();
-      if (!sn) break;
-      result.set(sn, office);
-      left.set(office, left.get(office) - 1);
-    }
-  }
-  return { assigned: result, leftOver: queue };
-}
-
-async function termRollover({ now, dryRun, settings }) {
-  const { dutyHelpers } = require('../routes/dutyHours');
-  const term = currentTerm(now);
-  const today = todayInManila(now);
-  const daysIn = daysBetween(termStart(term), today);
-  if (daysIn < 0 || daysIn >= ROLLOVER_WEEKS * 7) return { emails: [], summary: `Only runs in the first ${ROLLOVER_WEEKS} weeks of a semester.` };
-  const offices = (await listOffices()).filter(o => o.slots > 0);
-  if (!offices.length) return { emails: [], summary: 'No office slots set yet (Duty hours → Random assign or Offices).' };
-
-  const holders = [...await findCurrentHolders({ scholarshipId: SFAG_ID, ...term })];
-  const logs = await DutyLog.find({ ...term }).select('studentNumber officeAssigned').lean();
-  const officeOf = new Map(logs.filter(l => l.officeAssigned).map(l => [l.studentNumber, l.officeAssigned]));
-  const unassigned = holders.filter(sn => !officeOf.has(sn));
-  if (!unassigned.length) return { emails: [], summary: 'Every SFAG scholar has an office.' };
-
-  const byNorm = new Map(offices.map(o => [norm(o.office), o]));
-  const free = new Map(offices.map(o => [o.office, o.slots]));
-  for (const office of officeOf.values()) {
-    const o = byNorm.get(norm(office));
-    if (o) free.set(o.office, free.get(o.office) - 1);
-  }
-  // Last term's office first, when it still has room.
-  const assignment = new Map();
-  if (settings.keepLastOffice) {
-    const prev = previousTerm(term);
-    const prevLogs = await DutyLog.find({ ...prev, studentNumber: { $in: unassigned }, officeAssigned: { $nin: [null, ''] } }).select('studentNumber officeAssigned').lean();
-    for (const l of shuffled(prevLogs)) {
-      const o = byNorm.get(norm(l.officeAssigned));
-      if (o && free.get(o.office) > 0) {
-        assignment.set(l.studentNumber, o.office);
-        free.set(o.office, free.get(o.office) - 1);
-      }
-    }
-  }
-  const kept = assignment.size;
-  const { assigned, leftOver } = deal(unassigned.filter(sn => !assignment.has(sn)), free);
-  for (const [sn, office] of assigned) assignment.set(sn, office);
-
-  if (!dryRun && assignment.size) {
-    await DutyLog.bulkWrite([...assignment].map(([studentNumber, office]) => ({
-      updateOne: {
-        // Only if nobody assigned them in the meantime.
-        filter: { studentNumber, ...term, officeAssigned: { $in: [null, ''] } },
-        update: { $set: { officeAssigned: office, officeAssignedBy: 'AniSkolar (automatic)', officeAssignedAt: now }, $setOnInsert: { entries: [], specialEvents: [] } },
-        upsert: !officeOf.has(studentNumber) && !logs.some(l => l.studentNumber === studentNumber),
-      },
-    })));
-  }
-
-  const [students, rules] = await Promise.all([studentsBy(assignment.keys()), dutyHelpers.dutyRules([...assignment.keys()])]);
-  const emails = [];
-  const byOffice = new Map();
-  for (const [sn, office] of assignment) {
-    const o = byNorm.get(norm(office));
-    byOffice.set(office, [...(byOffice.get(office) ?? []), sn]);
-    const hours = rules.get(sn)?.requiredHours;
-    emails.push(email({
-      key: `assigned:${term.academicYear}:${term.term}:${sn}`,
-      kind: 'termRollover',
-      to: students.get(sn)?.email,
-      subject: `AniSkolar: your duty office this semester is ${office}`,
-      heading: 'Your duty office this semester',
-      intro: `${office}, ${termLabel(term)}.`,
-      body: [
-        hi(students.get(sn)), '',
-        `You'll render your SFAG duty hours at ${office}${o?.headName ? `, headed by ${o.headName}` : ''}.`,
-        '',
-        ...(hours ? [`- Required this semester: ${fmt(hours)} hours`] : []),
-        '- Duty is Monday–Thursday 8:00 AM–6:00 PM and Friday until 5:00 PM, not over the 12:00–1:00 PM lunch break, at least 1.5 hours at a time',
-        '- Log each duty on the Duty Hours page; your office head confirms them',
-        '', 'Please report to the office in your first week. If you have a conflict, message the scholarship office in AniSkolar.',
-      ].join('\n'),
-    }));
-  }
-  for (const [office, sns] of byOffice) {
-    const o = byNorm.get(norm(office));
-    if (!o?.headEmail) continue;
-    emails.push(email({
-      key: `office-new:${term.academicYear}:${term.term}:${norm(office)}:${today}`,
-      kind: 'termRollover',
-      to: o.headEmail,
-      subject: `AniSkolar: ${plural(sns.length, 'new scholar')} for ${office}`,
-      heading: `New scholars for ${office}`,
-      intro: `${termLabel(term)}.`,
-      body: [
-        `Good day${o.headName ? `, ${o.headName}` : ''}!`, '',
-        `These SFAG scholars will render duty in your office this semester:`,
-        ...sns.map(sn => `- ${students.get(sn)?.name || sn} (${sn})`),
-        '', 'They log their duties in AniSkolar; please confirm them in your office portal. To ask for more or fewer scholars, use Requests in the portal.',
-      ].join('\n'),
-    }));
-  }
-  return {
-    emails,
-    summary: assignment.size
-      ? `${dryRun ? 'Would assign' : 'Assigned'} ${plural(assignment.size, 'scholar')} (${kept} to last term's office)${leftOver.length ? `; ${leftOver.length} left without an office (no free slots)` : ''}.`
-      : `No free office slots: ${plural(leftOver.length, 'scholar')} still without an office. Add slots in Duty hours.`,
-    details: { assignments: [...assignment].map(([studentNumber, office]) => ({ studentNumber, name: students.get(studentNumber)?.name ?? '', office })), leftOver: leftOver.length },
-  };
-}
-
 const JOBS = {
   dutyReminders: { run: dutyReminders, due: c => c.weekday === 'Mon' && c.hour >= 8, period: c => isoWeek(c.date) },
   officeHeadReminders: { run: officeHeadReminders, due: c => c.weekday === 'Mon' && c.hour >= 8, period: c => isoWeek(c.date) },
   deadlineReminders: { run: deadlineReminders, due: c => c.hour >= 8, period: c => c.date },
-  adsoDigest: { run: adsoDigest, due: c => c.hour >= 7, period: c => c.date },
-  termRollover: { run: termRollover, due: c => c.hour >= 6, period: c => c.date },
 };
 
 async function record(job, period, result, error) {
@@ -529,4 +350,4 @@ async function runDueJobs(now = new Date()) {
   }
 }
 
-module.exports = { runDueJobs, runJob, digestCounts, parseDeadline, isoWeek, JOB_NAMES: Object.keys(JOBS) };
+module.exports = { runDueJobs, runJob, parseDeadline, isoWeek, JOB_NAMES: Object.keys(JOBS) };

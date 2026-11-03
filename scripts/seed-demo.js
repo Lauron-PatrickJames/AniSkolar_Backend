@@ -17,8 +17,7 @@
 // so your own student account works: it gets an approved SFAG whose duty
 // hours are done and evaluated. The real office heads (Duty hours →
 // Offices) are kept on their offices, so a head can sign in too: the
-// Registrar has duties to confirm, a scholar ready to evaluate, and a
-// request. To run the app on the demo data, add to the backend .env:
+// Registrar has duties to confirm and a scholar ready to evaluate. To run the app on the demo data, add to the backend .env:
 //   MONGODB_DB=aniskolar_demo
 //   AZURE_STORAGE_CONTAINER=aniskolar-demo
 // and restart; remove both lines to go back to the real data.
@@ -48,7 +47,6 @@ const DutyEvent = require('../models/DutyEvent');
 const Message = require('../models/Message');
 const MessageThread = require('../models/MessageThread');
 const { RENEWAL_DOCUMENTS } = require('../models/RenewalPeriod');
-const OfficeRequest = require('../models/OfficeRequest');
 const { findScholarship } = require('../data/scholarships');
 const { findProgram } = require('../data/programs');
 const { nextReferenceCode } = require('../utils/referenceCode');
@@ -546,13 +544,6 @@ function history(steps, office = 'LSO') {
   const sfagOf = sn => apps.find(a => a.studentNumber === sn && a.scholarshipId === 's1');
   const pdfFor = async (s, label) => (await docs([label], `${s.firstName} ${s.lastName}`))[0];
   const indigency = await pdfFor(S[2], 'Certificate of indigency (new copy)');
-  // Office requests: the Registrar asked for more (answered) and for a
-  // specific scholar now in the Library (open: the AdSO can assign her).
-  await OfficeRequest.insertMany([
-    { office: REGISTRAR, headName: regHead?.[0], headEmail: regHead?.[1], kind: 'more', count: 2, note: 'Enrollment season — we need two more scholars from November.', academicYear: 2026, term: '1st Semester', status: 'done', response: 'Two more scholars will start on November 3.', resolvedBy: ADMIN, resolvedAt: d('2026-10-16T09:00:00+08:00'), createdAt: d('2026-10-14T10:00:00+08:00') },
-    { office: REGISTRAR, headName: regHead?.[0], headEmail: regHead?.[1], kind: 'specific', studentNumber: S[4].studentNumber, scholar: `${S[4].name} (${S[4].studentNumber})`, note: 'She helped us during enrollment last year and knows our system.', academicYear: 2026, term: '1st Semester', createdAt: d('2026-10-27T11:00:00+08:00') },
-    { office: ACCOUNTING, headName: headOf(ACCOUNTING)?.[0], headEmail: headOf(ACCOUNTING)?.[1], kind: 'fewer', count: 1, note: 'Less work after the midterm deadlines.', academicYear: 2026, term: '1st Semester', status: 'declined', response: 'We need everyone until finals week. Thank you for understanding.', resolvedBy: ADMIN, resolvedAt: d('2026-10-20T09:00:00+08:00'), createdAt: d('2026-10-18T10:00:00+08:00') },
-  ]);
   await db.collection('messages').insertMany([
     { office: ACCOUNTING, from: 'office', authorName: `${headOf(ACCOUNTING)?.[0] ?? 'Head'} (Accounting Office)`, authorEmail: headOf(ACCOUNTING)?.[1], body: 'Good day! One of your scholars has been absent twice this week. Could you check with her?', attachments: [], readAt: null, createdAt: d('2026-10-16T14:20:00+08:00'), updatedAt: d('2026-10-16T14:20:00+08:00') },
   ]);

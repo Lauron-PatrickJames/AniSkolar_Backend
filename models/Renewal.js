@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { OFFICE_CODES } = require('../data/offices');
 
 // One scholar's renewal for one renewal period (models/RenewalPeriod.js).
 // Created by the scholar (POST /api/renewals); reviewed by the office that
@@ -48,7 +49,7 @@ const renewalSchema = new mongoose.Schema({
   studentNumber: { type: String, required: true, index: true },
   scholarshipId: { type: String, required: true },
   scholarshipName: { type: String, required: true },
-  office: { type: String, enum: ['LSO', 'POLCA', 'ALUMNI'], default: 'LSO', index: true },
+  office: { type: String, enum: OFFICE_CODES, default: 'LSO', index: true },
   academicYear: { type: Number, required: true },
   term: { type: String, required: true },
 

@@ -11,10 +11,17 @@ const mongoose = require('mongoose');
 
 const TERMS = ['1st Semester', '2nd Semester'];
 
-// Renewal is grades only (AdSO, Oct 2026): the scholar enters their GPA and
-// whether they had a failing grade, and uploads their grades. The same for
-// every period; older periods' own lists are ignored (routes/renewals.js).
+// What a renewal asks for (AdSO, Oct 2026). Every renewal: the GPA, whether
+// there was a failing grade, and the grades (TCG). A 2nd-semester renewal
+// is the grades only. A 1st-semester renewal (a new academic year) also
+// asks for the scholarship's application requirements again; the period
+// records them when the AdSO opens it (`requirements`).
 const RENEWAL_DOCUMENTS = ['Certified True Copy of Grades (TCG)'];
+
+function renewalDocuments(period) {
+  if (period?.term !== '1st Semester') return [...RENEWAL_DOCUMENTS];
+  return [...new Set([...RENEWAL_DOCUMENTS, ...(period.requirements || [])])];
+}
 
 const renewalPeriodSchema = new mongoose.Schema({
   scholarshipId: { type: String, required: true },
@@ -32,7 +39,8 @@ const renewalPeriodSchema = new mongoose.Schema({
   // Whether the scholar's department head evaluation (the SFAG's
   // 1–5 Student Assistant rating) is part of this renewal.
   requiresEvaluation: { type: Boolean, default: false },
-  // Kept for older periods; renewals always use RENEWAL_DOCUMENTS.
+  // 1st semester: the application requirements asked again (with the
+  // grades); see renewalDocuments.
   requirements: { type: [String], default: () => [...RENEWAL_DOCUMENTS] },
   notes: { type: String, trim: true, maxlength: 1000 },
   createdBy: String,
@@ -44,3 +52,4 @@ renewalPeriodSchema.index({ scholarshipId: 1, academicYear: 1, term: 1 }, { uniq
 module.exports = mongoose.model('RenewalPeriod', renewalPeriodSchema);
 module.exports.TERMS = TERMS;
 module.exports.RENEWAL_DOCUMENTS = RENEWAL_DOCUMENTS;
+module.exports.renewalDocuments = renewalDocuments;

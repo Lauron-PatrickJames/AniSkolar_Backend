@@ -4,10 +4,9 @@
 //
 // - POLCA / ALUMNI admins see every application tagged with their office,
 //   and nothing else.
-// - The AdSO ('LSO') sees its own applications plus every office
-//   application that office has approved (approving sends it over
-//   automatically; see PATCH /api/applications/:id/status). Office
-//   applications that haven't been approved stay with that office.
+// - The AdSO ('LSO') sees its own applications, and of an office's
+//   applications only the approved ones, read-only: the office handles its
+//   scholarships entirely (applications, decisions, graduated / stopped).
 // - An admin without an office matches nothing (fails closed);
 //   requireAdmin already refuses them, this is a second line of defence.
 
@@ -27,9 +26,18 @@ function officeFilter(adminUser) {
   return {
     $or: [
       { office: { $in: ['LSO', null] } },
-      { forwardedAt: { $ne: null } },
+      { office: { $nin: ['LSO', null] }, status: 'Approved' },
     ],
   };
 }
 
-module.exports = { scopedOffice, officeFilter };
+const { OFFICE_NAMES } = require('../data/offices');
+
+// The AdSO looking at an office's application: only that office can change
+// it. Returns the reason, or null.
+function partnerLock(adminUser, application) {
+  if (scopedOffice(adminUser) || !application?.office || application.office === 'LSO') return null;
+  return `The ${OFFICE_NAMES[application.office] ?? application.office} handles this scholarship, so only they can change its applications.`;
+}
+
+module.exports = { scopedOffice, officeFilter, partnerLock, OFFICE_NAMES };

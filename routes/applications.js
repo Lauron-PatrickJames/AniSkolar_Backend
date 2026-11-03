@@ -12,7 +12,7 @@ const ApplicationDraft = require('../models/ApplicationDraft');
 const ScholarshipSetting = require('../models/ScholarshipSetting');
 const Student = require('../models/Student');
 const { findScholarship, acceptsOnlineApplications } = require('../data/scholarships');
-const { officeFilter, scopedOffice } = require('../utils/officeScope');
+const { officeFilter, scopedOffice, partnerLock } = require('../utils/officeScope');
 const { academicYearStartExpr, inSfagApplicationWindow } = require('../utils/academicYear');
 const { nextReferenceCode } = require('../utils/referenceCode');
 const { otherScholarshipsHeld } = require('../utils/exclusivity');
@@ -175,7 +175,7 @@ router.post('/', requireStudent, (req, res) => {
 
       // The AdSO can close a scholarship from the admin Scholarships page.
       const setting = await ScholarshipSetting.findOne({ scholarshipId }).select('status').lean();
-      if (setting?.status === 'Closed') {
+      if ((setting?.status ?? scholarship.defaultStatus) === 'Closed') {
         return res.status(400).json({ error: 'This scholarship is closed and is no longer accepting applications.' });
       }
 
@@ -832,6 +832,8 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
     if (!application) {
       return res.status(404).json({ error: 'Application not found.' });
     }
+    const locked = partnerLock(req.adminUser, application);
+    if (locked) return res.status(403).json({ error: locked });
 
     // Once the LSO has overridden an office's decision, the office can no
     // longer change the status or the note the student sees — the LSO's
@@ -1055,6 +1057,8 @@ router.patch('/:id/end', requireAdmin, async (req, res) => {
     }
     const application = await Application.findOne({ _id: objectId, ...officeFilter(req.adminUser) });
     if (!application) return res.status(404).json({ error: 'Application not found.' });
+    const lockedEnd = partnerLock(req.adminUser, application);
+    if (lockedEnd) return res.status(403).json({ error: lockedEnd });
     if (!findScholarship(application.scholarshipId)?.noRenewal) return res.status(400).json({ error: 'This scholarship ends through its renewals.' });
     if (application.status !== 'Approved') return res.status(409).json({ error: 'Only an approved scholar can be marked as graduated or stopped.' });
     const { reason } = req.body || {};
@@ -1090,6 +1094,8 @@ router.patch('/:id/admin-fields', requireAdmin, async (req, res) => {
     if (!application) {
       return res.status(404).json({ error: 'Application not found.' });
     }
+    const lockedFields = partnerLock(req.adminUser, application);
+    if (lockedFields) return res.status(403).json({ error: lockedFields });
     if (application.applicationFormType !== 'polca') {
       return res.status(400).json({ error: 'Office-use fields only apply to POLCA applications.' });
     }

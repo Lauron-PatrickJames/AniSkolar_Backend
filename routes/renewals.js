@@ -1,5 +1,5 @@
 const express = require('express');
-const { RENEWAL_DOCUMENTS } = require('../models/RenewalPeriod');
+const { renewalDocuments } = require('../models/RenewalPeriod');
 const router = express.Router();
 const multer = require('multer');
 const mongoose = require('mongoose');
@@ -83,8 +83,8 @@ function periodView(period) {
   const scholarship = findScholarship(period.scholarshipId);
   return {
     ...(period.toObject ? period.toObject() : period),
-    // Grades only, for every period.
-    requirements: RENEWAL_DOCUMENTS,
+    // Grades; in the 1st semester also the application requirements.
+    requirements: renewalDocuments(period),
     scholarshipName: scholarship?.name ?? period.scholarshipId,
     office: scholarship?.office ?? 'LSO',
   };
@@ -99,8 +99,7 @@ function studentPeriodView(period) {
 // Admins only see periods / renewals for their office's scholarships; the
 // AdSO sees all.
 function canSeeScholarship(adminUser, scholarshipId) {
-  const office = scopedOffice(adminUser);
-  return !office || findScholarship(scholarshipId)?.office === office;
+  return (scopedOffice(adminUser) ?? 'LSO') === (findScholarship(scholarshipId)?.office ?? 'LSO');
 }
 
 const boolField = v => (v === true || v === 'true' ? true : v === false || v === 'false' ? false : undefined);
@@ -139,8 +138,8 @@ function parseSubmission(body, files, period, keptDocTypes = new Set()) {
   const hasFailingGrade = boolField(body.hasFailingGrade);
   if (hasFailingGrade === undefined) return { error: 'Tell us whether you had any failing grade last semester.' };
 
-  const requirements = RENEWAL_DOCUMENTS;
-  if (labels.some(l => !requirements.includes(l))) return { error: 'Only your grades are submitted for a renewal.' };
+  const requirements = renewalDocuments(period);
+  if (labels.some(l => !requirements.includes(l))) return { error: 'One of the documents isn’t needed for this renewal.' };
   const present = new Set([...keptDocTypes, ...labels]);
   const missing = requirements.filter(r => !present.has(r));
   if (missing.length) return { error: `Please upload all required documents. Missing: ${missing.join(', ')}.` };
@@ -308,7 +307,14 @@ function parsePeriodBody(body, { partial }) {
     }
   }
   if (body.requiresEvaluation !== undefined) out.requiresEvaluation = body.requiresEvaluation === true;
-  // The documents aren't chosen per period: renewal is grades only.
+  // 1st semester: the application requirements asked again (the frontend
+  // sends the scholarship's list). The grades are always added.
+  if (body.requirements !== undefined) {
+    if (!Array.isArray(body.requirements) || body.requirements.some(r => typeof r !== 'string')) return { error: 'Requirements must be a list of document names.' };
+    const items = [...new Set(body.requirements.map(r => r.trim()).filter(Boolean))];
+    if (items.length > 20 || items.some(r => r.length > 300)) return { error: 'Use at most 20 documents.' };
+    out.requirements = items;
+  }
   return { period: out };
 }
 
@@ -331,10 +337,11 @@ router.get('/admin/periods', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/admin/periods', requireAdso, async (req, res) => {
+router.post('/admin/periods', requireAdmin, async (req, res) => {
   try {
     const { period, error } = parsePeriodBody(req.body || {}, { partial: false });
     if (error) return res.status(400).json({ error });
+    if (!canSeeScholarship(req.adminUser, period.scholarshipId)) return res.status(403).json({ error: 'Only the office that runs this scholarship can open its renewal.' });
     if (period.minGpa === null) delete period.minGpa;
     // Checked here as well as by the unique index, which may still be
     // building on a new collection.
@@ -357,9 +364,11 @@ router.post('/admin/periods', requireAdso, async (req, res) => {
   }
 });
 
-router.patch('/admin/periods/:id', requireAdso, async (req, res) => {
+router.patch('/admin/periods/:id', requireAdmin, async (req, res) => {
   try {
     if (!isObjectId(req.params.id)) return res.status(400).json({ error: 'Invalid period id.' });
+    const owned = await RenewalPeriod.findById(req.params.id).select('scholarshipId').lean();
+    if (owned && !canSeeScholarship(req.adminUser, owned.scholarshipId)) return res.status(403).json({ error: 'Only the office that runs this scholarship can change its renewal.' });
     const body = { ...(req.body || {}) };
     // The scholarship and term of a period are fixed once scholars may
     // have submitted against it.

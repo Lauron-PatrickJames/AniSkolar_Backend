@@ -8,13 +8,13 @@ const { outboxCounts, processOutbox } = require('../utils/outbox');
 
 // The AdSO's Automation page (utils/automation.js).
 //   GET  /api/automation                  settings, last runs, outbox counts
-//   PUT  /api/automation                  { dutyReminders, …, adsoDigestTo, keepLastOffice }
+//   PUT  /api/automation                  { dutyReminders, officeHeadReminders, deadlineReminders }
 //   POST /api/automation/:job/preview     what the job would do now (nothing sent or changed)
 //   POST /api/automation/:job/run         run it now (emails nobody twice)
 //   GET  /api/automation/outbox?status=queued|failed   recent emails
 //   POST /api/automation/outbox/retry     send the failed ones again
 
-const BOOL_FIELDS = [...JOB_NAMES, 'keepLastOffice'];
+const BOOL_FIELDS = [...JOB_NAMES];
 
 async function view() {
   const settings = await AutomationSetting.current();
@@ -22,7 +22,6 @@ async function view() {
   return {
     settings: {
       ...Object.fromEntries(BOOL_FIELDS.map(k => [k, !!settings[k]])),
-      adsoDigestTo: settings.adsoDigestTo ?? [],
       updatedBy: settings.updatedBy ?? null,
       updatedAt: settings.updatedAt ?? null,
     },
@@ -45,14 +44,6 @@ router.put('/', requireAdso, async (req, res) => {
     const body = req.body || {};
     const $set = { updatedBy: req.adminUser.email || req.adminUser.id };
     for (const k of BOOL_FIELDS) if (body[k] !== undefined) $set[k] = body[k] === true;
-    if (body.adsoDigestTo !== undefined) {
-      if (!Array.isArray(body.adsoDigestTo)) return res.status(400).json({ error: 'List the emails for the summary.' });
-      const emails = [...new Set(body.adsoDigestTo.map(e => String(e || '').trim().toLowerCase()).filter(Boolean))];
-      if (emails.length > 10) return res.status(400).json({ error: 'At most 10 people get the summary.' });
-      const bad = emails.find(e => !/^[^\s@]+@dlsud\.edu\.ph$/.test(e));
-      if (bad) return res.status(400).json({ error: `${bad} isn't a @dlsud.edu.ph address.` });
-      $set.adsoDigestTo = emails;
-    }
     await AutomationSetting.updateOne({ _id: 'automation' }, { $set }, { upsert: true, runValidators: true });
     res.json(await view());
   } catch (err) {
