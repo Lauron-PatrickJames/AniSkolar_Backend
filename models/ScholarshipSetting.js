@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { OFFICE_CODES } = require('../data/offices');
 
 // AdSO-edited content for a scholarship. The built-in scholarships (id,
 // name, office, form type, document slots) live in code —
@@ -40,10 +41,12 @@ const scholarshipSettingSchema = new mongoose.Schema({
   // Scholarships created by the AdSO.
   custom: { type: Boolean, default: undefined },
   name: { type: String, trim: true, maxlength: 150 },
-  office: { type: String, enum: ['LSO', 'POLCA', 'ALUMNI'] },
+  office: { type: String, enum: OFFICE_CODES },
   category: { type: String, enum: ['Academic', 'Financial', 'Athletic', 'Leadership', 'Others'] },
   applicationMode: { type: String, enum: ['online', 'info'] },
   availNote: { type: String, trim: true, maxlength: 500 },
+  // No online application: the office students go to.
+  handledBy: { type: String, trim: true, maxlength: 150 },
   referenceCode: { type: String, trim: true, uppercase: true, maxlength: 10 },
   createdBy: String,
   updatedBy: String,
@@ -55,7 +58,7 @@ const EDITABLE_FIELDS = [
   'rules', 'customEligibility', 'documentKeys', 'customDocuments',
 ];
 // Fixed details of an AdSO-created scholarship (sent with its overrides).
-const CUSTOM_FIELDS = ['custom', 'name', 'office', 'category', 'applicationMode', 'availNote', 'referenceCode'];
+const CUSTOM_FIELDS = ['custom', 'name', 'office', 'category', 'applicationMode', 'availNote', 'handledBy', 'referenceCode'];
 
 scholarshipSettingSchema.methods.toOverrides = function toOverrides() {
   const out = { id: this.scholarshipId };

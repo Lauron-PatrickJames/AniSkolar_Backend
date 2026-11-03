@@ -5,7 +5,8 @@ const ScholarshipSetting = require('../models/ScholarshipSetting');
 const { SCHOLARSHIPS, allScholarships, findScholarship } = require('../data/scholarships');
 const { DOCUMENT_KEYS, parseRules } = require('../data/requirementCatalog');
 const customScholarships = require('../utils/customScholarships');
-const { requireAdso } = require('../middleware/requireAdmin');
+const { requireAdso, requireAdmin } = require('../middleware/requireAdmin');
+const { scopedOffice, OFFICE_NAMES } = require('../utils/officeScope');
 const { inSfagApplicationWindow, sfagOpenAllYear } = require('../utils/academicYear');
 
 // The SFAG takes new applications in June and July only (renewals the rest
@@ -32,7 +33,7 @@ const LIST_FIELDS = ['benefits', 'process'];
 // Lists where an empty list is a choice ("none"), not "use the default".
 const CHOICE_LIST_FIELDS = ['customEligibility', 'customDocuments'];
 const CATEGORIES = ['Academic', 'Financial', 'Athletic', 'Leadership', 'Others'];
-const OFFICES = ['LSO', 'POLCA', 'ALUMNI'];
+const { OFFICE_CODES: OFFICES } = require('../data/offices');
 const TEXT_LIMITS = { deadline: 200, description: 4000, submissionNote: 500, schedule: 300 };
 const LIST_ITEM_LIMIT = 1000;
 const LIST_MAX_ITEMS = 30;
@@ -51,7 +52,12 @@ router.get('/', async (req, res) => {
 // Counts cover every application for each scholarship, including POLCA and
 // Alumni ones their office hasn't approved yet: the AdSO sees the numbers
 // but reviews those applications only once the office approves them.
-router.get('/admin', requireAdso, async (req, res) => {
+// Each office manages its own scholarships (status, details, documents):
+// the AdSO its own, POLCA and Alumni theirs. The AdSO sees the others
+// read-only; an office sees only its own.
+const manages = (adminUser, scholarship) => (scopedOffice(adminUser) ?? 'LSO') === (scholarship?.office ?? 'LSO');
+
+router.get('/admin', requireAdmin, async (req, res) => {
   try {
     const [settings, counts] = await Promise.all([
       ScholarshipSetting.find({}),
@@ -66,8 +72,9 @@ router.get('/admin', requireAdso, async (req, res) => {
       entry.total += count;
       entry.byStatus[_id.status] = count;
     }
+    const own = scopedOffice(req.adminUser);
     res.json({
-      scholarships: allScholarships().map(s => ({
+      scholarships: allScholarships().filter(s => !own || s.office === own).map(s => ({
         id: s.id,
         name: s.name,
         office: s.office,
@@ -76,6 +83,7 @@ router.get('/admin', requireAdso, async (req, res) => {
         custom: !!s.custom,
         overrides: overridesById.get(s.id) || { id: s.id },
         applications: countsById[s.id] || { total: 0, byStatus: {} },
+        canEdit: manages(req.adminUser, s),
       })),
     });
   } catch (err) {
@@ -86,10 +94,13 @@ router.get('/admin', requireAdso, async (req, res) => {
 
 // Body: any of the editable fields. Send null (or '' / []) to clear an
 // override and fall back to the default in code.
-router.patch('/:id', requireAdso, async (req, res) => {
+router.patch('/:id', requireAdmin, async (req, res) => {
   try {
     const scholarship = findScholarship(req.params.id);
     if (!scholarship) return res.status(404).json({ error: 'Scholarship not found.' });
+    if (!manages(req.adminUser, scholarship)) {
+      return res.status(403).json({ error: `The ${OFFICE_NAMES[scholarship.office] ?? scholarship.office} manages this scholarship, so only they can change it.` });
+    }
 
     const body = req.body || {};
     const set = {};
@@ -213,6 +224,11 @@ function parseCustomFields(body, { partial = false, excludeId = null } = {}) {
     if (body.availNote !== null && typeof body.availNote !== 'string') return { error: 'The note must be text.' };
     value.availNote = (body.availNote || '').trim().slice(0, 500) || undefined;
   }
+  // No online application: the office students go to.
+  if (body.handledBy !== undefined) {
+    if (body.handledBy !== null && typeof body.handledBy !== 'string') return { error: 'The office must be text.' };
+    value.handledBy = (body.handledBy || '').trim().slice(0, 150) || undefined;
+  }
   if (!partial || body.referenceCode !== undefined) {
     const code = typeof body.referenceCode === 'string' ? body.referenceCode.trim().toUpperCase() : '';
     if (!/^[A-Z]{2,8}$/.test(code)) return { error: 'The reference code must be 2–8 letters, e.g. CSG.' };
@@ -223,9 +239,11 @@ function parseCustomFields(body, { partial = false, excludeId = null } = {}) {
   return { value };
 }
 
-router.post('/', requireAdso, async (req, res) => {
+router.post('/', requireAdmin, async (req, res) => {
   try {
-    const parsed = parseCustomFields(req.body || {});
+    // An office creates scholarships for itself; the AdSO picks the office.
+    const own = scopedOffice(req.adminUser);
+    const parsed = parseCustomFields({ ...(req.body || {}), ...(own ? { office: own } : {}) });
     if (parsed.error) return res.status(400).json({ error: parsed.error });
     // What students see, filled in at creation (all editable later).
     const body = req.body || {};
@@ -261,10 +279,11 @@ router.post('/', requireAdso, async (req, res) => {
   }
 });
 
-router.delete('/:id', requireAdso, async (req, res) => {
+router.delete('/:id', requireAdmin, async (req, res) => {
   try {
     const scholarship = findScholarship(req.params.id);
     if (!scholarship) return res.status(404).json({ error: 'Scholarship not found.' });
+    if (!manages(req.adminUser, scholarship)) return res.status(403).json({ error: 'Only the office that manages it can delete it.' });
     if (!scholarship.custom) return res.status(400).json({ error: 'Built-in scholarships can\'t be deleted. Close it instead.' });
     if (await Application.exists({ scholarshipId: scholarship.id })) {
       return res.status(409).json({ error: 'It has applications, so it can\'t be deleted. Close it instead.' });

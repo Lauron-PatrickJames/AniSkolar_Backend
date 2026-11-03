@@ -1,5 +1,5 @@
 const DutyLog = require('../models/DutyLog');
-const { RENEWAL_DOCUMENTS } = require('../models/RenewalPeriod');
+const { renewalDocuments } = require('../models/RenewalPeriod');
 const { previousTerm, PASSING_AVERAGE } = require('./renewals');
 const { officesWithHeads } = require('./offices');
 const { todayInManila } = require('./dutyHours');
@@ -34,7 +34,7 @@ function checkRenewal({ renewal, period, duty }) {
     : { key: 'failing', label: 'No failing grade', status: 'pass', detail: 'None reported' });
 
   const onFile = new Set((renewal.documents || []).map(d => d.docType));
-  const missing = RENEWAL_DOCUMENTS.filter(r => !onFile.has(r));
+  const missing = renewalDocuments(period).filter(r => !onFile.has(r));
   items.push(missing.length
     ? { key: 'documents', label: 'Documents', status: 'review', detail: `Missing: ${missing.join(', ')}` }
     : { key: 'documents', label: 'Documents', status: 'pass', detail: 'All uploaded' });

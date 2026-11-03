@@ -6,7 +6,6 @@ const DutyLog = require('../models/DutyLog');
 const Student = require('../models/Student');
 const RenewalPeriod = require('../models/RenewalPeriod');
 const Renewal = require('../models/Renewal');
-const OfficeRequest = require('../models/OfficeRequest');
 const { findScholarship } = require('../data/scholarships');
 const { summarize, currentTerm, todayInManila, entryHours } = require('../utils/dutyHours');
 const { findHolders, findCurrentHolders, parseEvaluationScores, previousTerm, EVALUATION_ITEMS, PASSING_AVERAGE } = require('../utils/renewals');
@@ -27,8 +26,6 @@ const { renderEmail } = require('../utils/emailTemplate');
 //                                                            evaluation state (in_progress / ready / done)
 //   PUT   /api/office/evaluations/:studentNumber             { academicYear, term, scores, remarks }
 //                                                            once the scholar's hours are complete
-//   GET   /api/office/requests  ·  POST /api/office/requests { kind, studentNumber, count, note }
-//   GET   /api/office/scholar-directory   scholars a head can ask for (see below)
 // Messages with the AdSO are in routes/messages.js (/api/messages/office…).
 
 const TERMS = DutyLog.TERMS;
@@ -232,117 +229,6 @@ router.put('/evaluations/:studentNumber', requireOfficeHead, async (req, res) =>
   } catch (err) {
     console.error('Save office evaluation error:', err);
     res.status(500).json({ error: 'Failed to save the evaluation.' });
-  }
-});
-
-// --- Requests ------------------------------------------------------------------
-
-router.get('/requests', requireOfficeHead, async (req, res) => {
-  try {
-    const all = await OfficeRequest.find({}).sort({ createdAt: -1 }).limit(200).lean();
-    res.json({ requests: all.filter(r => norm(r.office) === norm(req.officeHead.office)) });
-  } catch (err) {
-    console.error('Office requests error:', err);
-    res.status(500).json({ error: 'Failed to load your requests.' });
-  }
-});
-
-// Scholars a head can ask for: this semester's SFAG scholars, and anyone
-// who rendered duty in this office before (marked workedHere, with the
-// last term). Name, program and year only, plus where each one is this
-// semester: 'here', 'elsewhere', 'unassigned', or 'inactive' (not an SFAG
-// scholar this semester, so they can't be requested).
-async function scholarDirectory(office) {
-  const term = currentTerm();
-  const [holders, termLogs, officeLogs] = await Promise.all([
-    findCurrentHolders({ scholarshipId: 's1', ...term }),
-    DutyLog.find(term).select('studentNumber officeAssigned').lean(),
-    DutyLog.find({ officeAssigned: { $nin: [null, ''] } }).select('studentNumber officeAssigned academicYear term').lean(),
-  ]);
-  const thisTerm = new Map(termLogs.map(l => [l.studentNumber, l.officeAssigned]));
-  const lastHere = new Map();
-  for (const l of officeLogs) {
-    if (norm(l.officeAssigned) !== norm(office)) continue;
-    const prev = lastHere.get(l.studentNumber);
-    const rank = l.academicYear * 2 + (l.term === '2nd Semester' ? 1 : 0);
-    if (!prev || rank > prev.rank) lastHere.set(l.studentNumber, { rank, academicYear: l.academicYear, term: l.term });
-  }
-  const numbers = [...new Set([...holders, ...thisTerm.keys(), ...lastHere.keys()])];
-  const students = await Student.find({ studentNumber: { $in: numbers } }).select('studentNumber name programCode yearLevel avatarUrl').lean();
-  const byNumber = new Map(students.map(s => [s.studentNumber, s]));
-  return numbers.map(sn => {
-    const s = byNumber.get(sn);
-    const current = holders.has(sn) || thisTerm.has(sn);
-    const assigned = thisTerm.get(sn);
-    const last = lastHere.get(sn);
-    return {
-      studentNumber: sn,
-      name: s?.name ?? '',
-      program: s?.programCode ?? '',
-      yearLevel: s?.yearLevel ?? '',
-      avatarUrl: s?.avatarUrl,
-      status: !current ? 'inactive' : !assigned ? 'unassigned' : norm(assigned) === norm(office) ? 'here' : 'elsewhere',
-      workedHere: last ? { academicYear: last.academicYear, term: last.term } : null,
-    };
-  }).filter(r => r.name || r.status !== 'inactive')
-    .sort((a, b) => (!!b.workedHere - !!a.workedHere) || a.name.localeCompare(b.name));
-}
-
-router.get('/scholar-directory', requireOfficeHead, async (req, res) => {
-  try {
-    res.json({ term: currentTerm(), scholars: await scholarDirectory(req.officeHead.office) });
-  } catch (err) {
-    console.error('Office scholar directory error:', err);
-    res.status(500).json({ error: 'Failed to load the scholars.' });
-  }
-});
-
-router.post('/requests', requireOfficeHead, async (req, res) => {
-  try {
-    const body = req.body || {};
-    if (!OfficeRequest.KINDS.includes(body.kind)) return res.status(400).json({ error: 'Choose what you’re requesting.' });
-    const note = typeof body.note === 'string' ? body.note.trim().slice(0, 1000) : '';
-    const count = body.count === undefined || body.count === '' ? undefined : Number(body.count);
-    // A specific scholar is picked from the directory: an SFAG scholar this
-    // semester who isn't already in this office.
-    let scholar = '';
-    let studentNumber;
-    if (body.kind === 'specific') {
-      const picked = (await scholarDirectory(req.officeHead.office)).find(s => s.studentNumber === body.studentNumber);
-      if (!picked) return res.status(400).json({ error: 'Choose the scholar from the list.' });
-      if (picked.status === 'inactive') return res.status(400).json({ error: `${picked.name || picked.studentNumber} isn’t an SFAG scholar this semester.` });
-      if (picked.status === 'here') return res.status(400).json({ error: `${picked.name || picked.studentNumber} is already in your office this semester.` });
-      if (await OfficeRequest.exists({ office: req.officeHead.office, kind: 'specific', studentNumber: picked.studentNumber, status: 'open' })) {
-        return res.status(409).json({ error: 'You already asked for this scholar. The scholarship office will answer it.' });
-      }
-      studentNumber = picked.studentNumber;
-      scholar = `${picked.name || 'Scholar'} (${picked.studentNumber})`;
-    }
-    if ((body.kind === 'more' || body.kind === 'fewer') && (!Number.isInteger(count) || count < 1 || count > 20)) return res.status(400).json({ error: 'Enter how many scholars (1–20).' });
-    if (body.kind === 'other' && !note) return res.status(400).json({ error: 'Write your request.' });
-    const term = currentTerm();
-    const request = await OfficeRequest.create({
-      office: req.officeHead.office, headEmail: req.officeHead.email, headName: req.officeHead.name,
-      kind: body.kind, ...(scholar ? { scholar, studentNumber } : {}), ...(count ? { count } : {}), ...(note ? { note } : {}),
-      ...term,
-    });
-    if (process.env.ADSO_NOTIFY_EMAIL) {
-      const what = { specific: `a specific scholar: ${scholar}`, more: `${count} more scholar${count === 1 ? '' : 's'}`, fewer: `${count} fewer scholar${count === 1 ? '' : 's'}`, other: 'something else' }[body.kind];
-      const email = renderEmail({
-        heading: `Request from ${req.officeHead.office}`,
-        intro: `${req.officeHead.name || req.officeHead.email} asked for ${what}.`,
-        body: note,
-        button: { url: appUrl(), label: 'Open Duty hours → Requests' },
-      });
-      // Through the outbox, like message alerts (sent within the email limits).
-      queueEmails([{ key: `office-request:${request._id}`, kind: 'officeRequest', priority: 1, to: process.env.ADSO_NOTIFY_EMAIL, subject: `AniSkolar: request from ${req.officeHead.office}`, ...email }])
-        .then(n => n && processOutbox())
-        .catch(err => console.error('Queueing the request email failed:', err));
-    }
-    res.status(201).json({ request });
-  } catch (err) {
-    console.error('Create office request error:', err);
-    res.status(500).json({ error: 'Failed to send the request.' });
   }
 });
 

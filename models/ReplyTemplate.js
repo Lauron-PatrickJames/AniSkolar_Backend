@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { OFFICE_CODES } = require('../data/offices');
 
 // Saved replies: messages the office sends often (decision messages,
 // common answers), shared by everyone in the office. {firstName},
@@ -9,7 +10,7 @@ const CONTEXTS = ['application', 'renewal', 'message'];
 const DECISIONS = ['Approved', 'Rejected', 'Needs Revision', 'Renewed', 'Not Renewed'];
 
 const replyTemplateSchema = new mongoose.Schema({
-  office: { type: String, enum: ['LSO', 'POLCA', 'ALUMNI'], required: true, index: true },
+  office: { type: String, enum: OFFICE_CODES, required: true, index: true },
   title: { type: String, required: true, trim: true, maxlength: 80 },
   body: { type: String, required: true, trim: true, maxlength: 2000 },
   context: { type: String, enum: CONTEXTS, required: true },

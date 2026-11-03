@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { OFFICE_CODES } = require('../data/offices');
 
 // One entry per uploaded document (built in routes/applications.js when
 // streaming files into GridFS) — fileId points at the GridFS file, docType
@@ -69,7 +70,7 @@ const applicationSchema = new mongoose.Schema({
   // Which scholarship office reviews this application. Derived server-side
   // from the scholarship registry (data/scholarships.js). Applications
   // created before offices existed have no value and are treated as 'LSO'.
-  office: { type: String, enum: ['LSO', 'POLCA', 'ALUMNI'], default: 'LSO', index: true },
+  office: { type: String, enum: OFFICE_CODES, default: 'LSO', index: true },
 
   // 'polca' and 'alumni' are the grant-form flows. They reuse the same
   // section fields as 'sfag' below (personalInfo, contactSchool,
