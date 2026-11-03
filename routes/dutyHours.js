@@ -8,7 +8,6 @@ const Renewal = require('../models/Renewal');
 const DutyLog = require('../models/DutyLog');
 const DutySetting = require('../models/DutySetting');
 const DutyEvent = require('../models/DutyEvent');
-const OfficeRequest = require('../models/OfficeRequest');
 const { norm, officesWithHeads } = require('../utils/offices');
 const Student = require('../models/Student');
 const { findCurrentHolders } = require('../utils/renewals');
@@ -357,71 +356,6 @@ router.put('/admin/office-slots', requireAdso, async (req, res) => {
   } catch (err) {
     console.error('Save office slots error:', err);
     res.status(500).json({ error: 'Failed to save the office slots.' });
-  }
-});
-
-// Office requests (sent from the office portal).
-//   GET   /api/duty-hours/admin/requests?status=open|done|declined
-//   PATCH /api/duty-hours/admin/requests/:id  { status: 'done' | 'declined' | 'open', response }
-//   POST  /api/duty-hours/admin/requests/:id/assign  { response? }  assigns the requested
-//         scholar to the office for the request's term and marks it done
-router.get('/admin/requests', requireAdso, async (req, res) => {
-  try {
-    const filter = OfficeRequest.STATUSES.includes(req.query.status) ? { status: req.query.status } : {};
-    const requests = await OfficeRequest.find(filter).sort({ status: 1, createdAt: -1 }).limit(300).lean();
-    res.json({ requests, open: await OfficeRequest.countDocuments({ status: 'open' }) });
-  } catch (err) {
-    console.error('Load office requests error:', err);
-    res.status(500).json({ error: 'Failed to load the requests.' });
-  }
-});
-
-router.patch('/admin/requests/:id', requireAdso, async (req, res) => {
-  try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid request.' });
-    const { status } = req.body || {};
-    if (!OfficeRequest.STATUSES.includes(status)) return res.status(400).json({ error: 'Choose Done, Declined or Open.' });
-    const response = typeof req.body.response === 'string' ? req.body.response.trim().slice(0, 1000) : undefined;
-    const request = await OfficeRequest.findByIdAndUpdate(req.params.id, {
-      $set: { status, ...(response !== undefined ? { response } : {}), resolvedBy: status === 'open' ? undefined : (req.adminUser.email || req.adminUser.id), resolvedAt: status === 'open' ? undefined : new Date() },
-    }, { returnDocument: 'after' }).lean();
-    if (!request) return res.status(404).json({ error: 'Request not found.' });
-    res.json({ request });
-  } catch (err) {
-    console.error('Update office request error:', err);
-    res.status(500).json({ error: 'Failed to update the request.' });
-  }
-});
-
-router.post('/admin/requests/:id/assign', requireAdso, async (req, res) => {
-  try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid request.' });
-    const request = await OfficeRequest.findById(req.params.id).lean();
-    if (!request) return res.status(404).json({ error: 'Request not found.' });
-    if (request.kind !== 'specific' || !request.studentNumber) return res.status(400).json({ error: 'This request isn’t for a specific scholar.' });
-    const term = { academicYear: request.academicYear, term: request.term };
-    const holders = await findCurrentHolders({ scholarshipId: DUTY_SCHOLARSHIP_ID, ...term });
-    const hasLog = await DutyLog.exists({ ...term, studentNumber: request.studentNumber });
-    if (!holders.has(request.studentNumber) && !hasLog) return res.status(400).json({ error: 'This scholar isn’t an SFAG scholar for that semester anymore.' });
-    const termDeadline = await DutySetting.deadlineFor(term);
-    await DutyLog.updateOne(
-      { studentNumber: request.studentNumber, ...term },
-      {
-        $set: { officeAssigned: request.office, officeAssignedBy: req.adminUser.email || req.adminUser.id, officeAssignedAt: new Date() },
-        $setOnInsert: { studentNumber: request.studentNumber, ...term, entries: [], specialEvents: [], ...(termDeadline ? { deadline: termDeadline } : {}) },
-      },
-      { upsert: true }
-    );
-    const response = typeof req.body?.response === 'string' && req.body.response.trim()
-      ? req.body.response.trim().slice(0, 1000)
-      : `Assigned ${request.scholar || request.studentNumber} to your office.`;
-    const updated = await OfficeRequest.findByIdAndUpdate(request._id, {
-      $set: { status: 'done', response, resolvedBy: req.adminUser.email || req.adminUser.id, resolvedAt: new Date() },
-    }, { returnDocument: 'after' }).lean();
-    res.json({ request: updated });
-  } catch (err) {
-    console.error('Assign requested scholar error:', err);
-    res.status(500).json({ error: 'Failed to assign the scholar.' });
   }
 });
 

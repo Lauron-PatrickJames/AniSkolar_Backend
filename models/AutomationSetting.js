@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 // AdSO on the Automation page. Everything starts off, so nobody is emailed
 // until the office decides to. One document, _id 'automation'.
 
-const JOBS = ['dutyReminders', 'officeHeadReminders', 'deadlineReminders', 'adsoDigest', 'termRollover'];
+const JOBS = ['dutyReminders', 'officeHeadReminders', 'deadlineReminders'];
 
 const lastRunSchema = new mongoose.Schema({
   period: String,       // the day / week it ran for, e.g. '2026-10-19' or '2026-W43'
@@ -30,7 +30,7 @@ const automationSettingSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 automationSettingSchema.statics.current = async function current() {
-  return (await this.findById('automation').lean()) ?? { _id: 'automation', dutyReminders: false, officeHeadReminders: false, deadlineReminders: false, adsoDigest: false, adsoDigestTo: [], termRollover: false, keepLastOffice: true, lastRuns: {} };
+  return (await this.findById('automation').lean()) ?? { _id: 'automation', dutyReminders: false, officeHeadReminders: false, deadlineReminders: false, lastRuns: {} };
 };
 
 module.exports = mongoose.model('AutomationSetting', automationSettingSchema);
