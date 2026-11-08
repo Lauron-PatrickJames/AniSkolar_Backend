@@ -21,7 +21,21 @@ const entrySchema = new mongoose.Schema({
   reviewedBy: String,                         // the head's email
   reviewedAt: Date,
   note: { type: String, trim: true, maxlength: 500 },
+  // When the scholar logged it. Duties must be logged the same day, and one
+  // the head hasn't confirmed or flagged within 48 hours of this is removed
+  // (utils/dutyExpiry.js). Older entries don't have it and never expire.
+  loggedAt: Date,
 }, { _id: true });
+
+// A duty removed because the head didn't review it within 48 hours, kept
+// so the scholar sees what happened.
+const expiredEntrySchema = new mongoose.Schema({
+  date: String,
+  timeIn: String,
+  timeOut: String,
+  loggedAt: Date,
+  removedAt: { type: Date, default: Date.now },
+}, { _id: false });
 
 // The office head's evaluation of the scholar's duty this term (the 1–5
 // ratings of utils/renewals.js EVALUATION_ITEMS), entered in the office
@@ -68,6 +82,7 @@ const dutyLogSchema = new mongoose.Schema({
   // accepted from scholars; kept so old logs still add up.
   specialEvents: { type: [specialEventSchema], default: [] },
   eventClaims: { type: [eventClaimSchema], default: [] },
+  expiredEntries: { type: [expiredEntrySchema], default: [] },
   evaluation: { type: evaluationSchema },
 }, { timestamps: true });
 

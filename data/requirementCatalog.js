@@ -2,6 +2,8 @@
 // from. Mirrors the frontend's src/data/requirementCatalog.ts (which also
 // holds the wording) — keep the keys in sync.
 
+const { findProgram } = require('./programs');
+
 const APPLICANT_TYPES = ['incoming', 'continuing', 'any'];
 
 // Rule key -> how its value is validated.
@@ -14,6 +16,9 @@ const RULES = {
   residencySemesters: { kind: 'number', min: 1, max: 8 },
   filipino: { kind: 'flag' },
   noBalance: { kind: 'flag' },
+  // Open only to students of these programs (codes from data/programs.js);
+  // unset = every program. Others don't see it in Explore and can't apply.
+  programs: { kind: 'programs' },
 };
 
 const DOCUMENT_KEYS = [
@@ -31,6 +36,12 @@ function parseRules(input) {
     const spec = RULES[key];
     if (!spec) return { error: `Unknown eligibility rule: ${key}.` };
     if (raw === null || raw === undefined || raw === false || raw === '') continue;
+    if (spec.kind === 'programs') {
+      if (!Array.isArray(raw) || raw.some(c => typeof c !== 'string' || !findProgram(c))) return { error: 'Choose programs from the list.' };
+      const codes = [...new Set(raw.map(c => findProgram(c).code))];
+      if (codes.length) value[key] = codes;
+      continue;
+    }
     if (spec.kind === 'flag') {
       if (raw !== true) return { error: `${key} must be true or false.` };
       value[key] = true;
