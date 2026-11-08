@@ -557,6 +557,44 @@ router.post('/me/correction-requests', async (req, res) => {
   }
 });
 
+// GET /api/students — AdSO only: every student who finished setting up a
+// profile, with how many applications they've submitted, so the office can
+// see who signed up but hasn't applied yet. Only the profile details the
+// student gave at sign-up; no activity tracking.
+router.get('/', requireAdso, async (req, res) => {
+  try {
+    const [students, counts] = await Promise.all([
+      Student.find({})
+        .select('studentNumber firstName middleName lastName name email avatarUrl programCode course college yearLevel createdAt')
+        .sort({ createdAt: -1 })
+        .lean(),
+      Application.aggregate([{ $group: { _id: '$studentNumber', n: { $sum: 1 }, last: { $max: '$createdAt' } } }]),
+    ]);
+    const byStudent = new Map(counts.map(c => [c._id, c]));
+    res.json({
+      students: students.map(s => ({
+        studentNumber: s.studentNumber,
+        firstName: s.firstName ?? null,
+        middleName: s.middleName ?? null,
+        lastName: s.lastName ?? null,
+        name: s.name ?? null,
+        email: s.email ?? null,
+        avatarUrl: s.avatarUrl ?? null,
+        programCode: s.programCode ?? null,
+        course: s.course ?? null,
+        college: s.college ?? null,
+        yearLevel: s.yearLevel ?? null,
+        joinedAt: s.createdAt ?? null,
+        applications: byStudent.get(s.studentNumber)?.n ?? 0,
+        lastAppliedAt: byStudent.get(s.studentNumber)?.last ?? null,
+      })),
+    });
+  } catch (err) {
+    console.error('Student list error:', err);
+    res.status(500).json({ error: 'Failed to load the students.' });
+  }
+});
+
 // PATCH /api/students/:studentNumber/verification  { group, verified }
 // AdSO only: marks a group of a student's academic details as verified
 // (locking it from student edits) or back to self-reported. Verifying
