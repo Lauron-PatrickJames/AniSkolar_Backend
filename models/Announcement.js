@@ -235,7 +235,9 @@ announcementSchema.methods.toFeedShape = function toFeedShape() {
     scholarshipId: this.scholarshipId || null,
     postedBy: this.dutyOffice || require('../data/offices').OFFICE_NAMES[this.office || 'LSO'] || null,
     imageUrls: imageUrls(this),
-    fbPermalink: this.fbPostId ? this.fbPermalink : null
+    fbPermalink: this.fbPostId ? this.fbPermalink : null,
+    // ISO time, for "new announcement" notifications.
+    publishedAt: (this.publishedAt || this.createdAt)?.toISOString?.() ?? null
   };
 };
 

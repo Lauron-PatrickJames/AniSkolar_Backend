@@ -122,6 +122,11 @@ mongoose.connect(process.env.MONGODB_URI, process.env.MONGODB_DB ? { dbName: pro
     const runJobs = () => runDueJobs().catch(err => console.error('Automation failed:', err));
     setTimeout(runJobs, 30_000);
     setInterval(runJobs, 15 * 60_000);
+    // Duties the office head didn't review within 48 hours are removed.
+    const { expireUnreviewedDuties } = require('./utils/dutyExpiry');
+    const expireDuties = () => expireUnreviewedDuties().catch(err => console.error('Removing unreviewed duties failed:', err));
+    setTimeout(expireDuties, 60_000);
+    setInterval(expireDuties, 15 * 60_000);
     setInterval(() => processOutbox().catch(err => console.error('Sending queued emails failed:', err)), 60_000);
   })
   .catch(err => {

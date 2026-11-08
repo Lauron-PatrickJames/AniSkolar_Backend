@@ -49,7 +49,7 @@ async function officeLogs(office, term, extra = {}) {
 }
 
 function entryView(e) {
-  return { _id: String(e._id), date: e.date, timeIn: e.timeIn, timeOut: e.timeOut, hours: entryHours(e), status: e.status ?? null, note: e.note ?? null, reviewedAt: e.reviewedAt ?? null };
+  return { _id: String(e._id), date: e.date, timeIn: e.timeIn, timeOut: e.timeOut, hours: entryHours(e), status: e.status ?? null, note: e.note ?? null, reviewedAt: e.reviewedAt ?? null, loggedAt: e.loggedAt ?? null };
 }
 
 router.get('/me', requireOfficeHead, (req, res) => {

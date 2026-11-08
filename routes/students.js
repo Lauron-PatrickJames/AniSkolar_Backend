@@ -28,8 +28,9 @@ function validStudentNumber(value) {
 // tied to Clerk/verification, not editable profile data. Course and
 // college aren't either: they follow from programCode (data/programs.js).
 const EDITABLE_FIELDS = [
-  // The middle name and suffix are the student's to enter; first/last come from Clerk.
-  'middleName', 'nameSuffix',
+  // First and last name start from Clerk; the student confirms or corrects
+  // them at sign-up (Microsoft sometimes splits a name wrongly).
+  'firstName', 'lastName', 'middleName', 'nameSuffix',
   'programCode', 'yearLevel', 'section', 'gpa',
   'dateOfBirth', 'nationality', 'placeOfBirth', 'civilStatus',
   'homeAddress', 'cityMunicipality', 'province', 'zipCode', 'country',
@@ -49,14 +50,15 @@ const GROUP_LABELS = { program: 'Program', enrollment: 'Year level and section',
 // Set once at sign-up; afterwards only the AdSO can change them (the
 // student agrees to this on the sign-up review step and asks for changes
 // with a "personal" correction request).
-const LOCKED_FIELDS = ['middleName', 'nameSuffix', 'dateOfBirth', 'placeOfBirth', 'nationality', 'civilStatus', 'programCode'];
+const LOCKED_FIELDS = ['firstName', 'lastName', 'middleName', 'nameSuffix', 'dateOfBirth', 'placeOfBirth', 'nationality', 'civilStatus', 'programCode'];
 
 // Required at sign-up: everything except the telephone and suffix, a 1st
 // year's GPA, a deceased parent's contact, and the guardian's details when
 // the guardian is a parent. Mirrors validateDraft() in the frontend's
 // components/profile/profileForm.ts. Returns a message or null.
 const REQUIRED_LABELS = {
-  programCode: 'program', yearLevel: 'year level', section: 'section', middleName: 'middle name',
+  programCode: 'program', yearLevel: 'year level', section: 'section',
+  firstName: 'first name', lastName: 'last name', middleName: 'middle name',
   dateOfBirth: 'date of birth', placeOfBirth: 'place of birth', nationality: 'nationality', civilStatus: 'civil status',
   mobileNumber: 'mobile number', homeAddress: 'street address', province: 'province', cityMunicipality: 'city or municipality',
   zipCode: 'ZIP code', fatherName: "father's name", motherName: "mother's name", guardianType: 'guardian',
@@ -77,6 +79,8 @@ function missingRequired(data) {
 }
 
 const TEXT_LIMIT = 200;
+// Letters (any language), spaces, hyphens, apostrophes and periods.
+const NAME_PATTERN = /^\p{L}[\p{L}\p{M}\s.'’-]*$/u;
 
 // Philippine mobile number -> 09XXXXXXXXX, or null if it isn't one.
 // Accepts 09XXXXXXXXX, +639XXXXXXXXX or 639XXXXXXXXX, with spaces or dashes.
@@ -122,6 +126,15 @@ function sanitizeProfileFields(body) {
       data.programCode = program.code;
       data.course = program.name;
       data.college = program.college;
+    }
+  }
+
+  for (const f of ['firstName', 'middleName', 'lastName']) {
+    if (data[f] === undefined) continue;
+    if (typeof data[f] !== 'string') return { error: 'Names must be text.' };
+    data[f] = data[f].replace(/\s+/g, ' ').slice(0, 60);
+    if (data[f] && !NAME_PATTERN.test(data[f])) {
+      return { error: 'Names can only have letters, spaces, hyphens, apostrophes and periods.' };
     }
   }
 
@@ -397,13 +410,22 @@ router.post('/complete-profile', async (req, res) => {
     if (error) {
       return res.status(400).json({ error });
     }
+    // An older page that doesn't send names: use Clerk's.
+    const fromClerk = nameParts(clerkUser);
+    if (data.firstName === undefined) data.firstName = fromClerk.firstName;
+    if (data.lastName === undefined) data.lastName = fromClerk.lastName;
     const missing = missingRequired(data);
     if (missing) return res.status(400).json({ error: missing });
     if (req.body.agreed !== true) {
       return res.status(400).json({ error: 'Confirm that your details are true and complete before you finish.' });
     }
 
-    const names = { ...nameParts(clerkUser), middleName: data.middleName || undefined, nameSuffix: data.nameSuffix };
+    const names = {
+      firstName: data.firstName,
+      lastName: data.lastName,
+      middleName: data.middleName || undefined,
+      nameSuffix: data.nameSuffix,
+    };
     const student = new Student({
       clerkId: userId,
       studentNumber,
