@@ -238,13 +238,39 @@ function verifiedChangeError(student, data) {
   return null;
 }
 
-// First and last name exactly as Clerk has them. Never split a full-name
-// string: "Patrick James" + "Lauron" must not become "Patrick" + "James Lauron".
+// Words that belong to the surname after them ("dela Cruz", "San Jose").
+const SURNAME_PARTICLES = new Set(['de', 'del', 'dela', 'delas', 'delos', 'di', 'da', 'du', 'la', 'las', 'los', 'san', 'santa', 'sta', 'sta.', 'sto', 'sto.', 'van', 'von', 'mac', 'mc']);
+
+// The DLSU-D Microsoft directory sends only the first word as the first
+// name and the other given names with the surname ("JUAN" + "MIGUEL
+// DELA CRUZ"). The username starts with the surname's initial (dja1234 =
+// Dela Cruz, Juan, …), so the surname is the shortest ending of the last
+// name that starts with that letter, with any particle before it. Left
+// unchanged when that doesn't fit (first name already several words, a
+// one-word last name, no match). Mirrors splitDirectoryName in the
+// frontend's utils/names.ts.
+function splitDirectoryName(first, last, email) {
+  const f = (first || '').trim().replace(/\s+/g, ' ');
+  const l = (last || '').trim().replace(/\s+/g, ' ');
+  const initial = (email || '').trim().charAt(0).toLowerCase();
+  const words = l.split(' ').filter(Boolean);
+  if (!f || f.includes(' ') || words.length < 2 || !/[a-z]/.test(initial)) return { firstName: f, lastName: l };
+  for (let i = words.length - 1; i >= 1; i--) {
+    if (words[i].charAt(0).toLowerCase() !== initial) continue;
+    let start = i;
+    while (start > 1 && SURNAME_PARTICLES.has(words[start - 1].toLowerCase())) start--;
+    return { firstName: [f, ...words.slice(0, start)].join(' '), lastName: words.slice(start).join(' ') };
+  }
+  return { firstName: f, lastName: l };
+}
+
+// First and last name from Clerk (the Microsoft directory), re-split as
+// above. Only a fallback: the student confirms their name at sign-up.
 function nameParts(clerkUser) {
-  return {
-    firstName: (clerkUser.firstName || '').trim() || undefined,
-    lastName: (clerkUser.lastName || '').trim() || undefined,
-  };
+  const email = clerkUser.emailAddresses?.find(e => e.id === clerkUser.primaryEmailAddressId)?.emailAddress
+    || clerkUser.emailAddresses?.[0]?.emailAddress || '';
+  const { firstName, lastName } = splitDirectoryName(clerkUser.firstName, clerkUser.lastName, email);
+  return { firstName: firstName || undefined, lastName: lastName || undefined };
 }
 
 function fullName({ firstName, middleName, lastName, nameSuffix }) {
