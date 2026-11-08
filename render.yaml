@@ -4,16 +4,16 @@
 # are typed into Render's dashboard when the Blueprint is created; copy
 # them from your backend .env. Never put their values in this file.
 #
-# plan: free sleeps after 15 minutes without visits (the first visit then
-# takes about a minute, and the timers — scheduled announcements, the email
-# outbox, Automation — pause while it sleeps). Change it to `starter` for
-# real use.
+# plan: starter ($7/month, 0.5 CPU, 512 MB) never sleeps, so the timers —
+# scheduled announcements, the email outbox, Automation — keep running.
+# (On `free` it slept after 15 minutes idle and once failed to wake up,
+# Nov 2026.) Keep this the same as the instance type in Render's dashboard.
 services:
   - type: web
     name: aniskolar-api
     runtime: node
     region: singapore
-    plan: free
+    plan: starter
     branch: claude/youthful-hawking-4wghiu
     buildCommand: npm ci
     startCommand: npm start

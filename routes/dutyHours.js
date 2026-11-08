@@ -217,6 +217,20 @@ router.put('/mine', requireSfagScholar, async (req, res) => {
     if (!existing?.officeAssigned && log.entries.some(e => !before.has(`${e.date}|${e.timeIn}|${e.timeOut}`))) {
       return res.status(409).json({ error: 'You can log duties once the scholarship office assigns your office.' });
     }
+    // A new duty is logged on the day it's rendered (AdSO, Nov 2026). The
+    // one exception: correcting a duty the head flagged, which keeps its
+    // date (the flagged one is replaced in the same save).
+    const today = todayInManila();
+    const keptKeys = new Set(log.entries.map(e => `${e.date}|${e.timeIn}|${e.timeOut}`));
+    const fixableDates = (existing?.entries || [])
+      .filter(e => e.status === 'flagged' && !keptKeys.has(`${e.date}|${e.timeIn}|${e.timeOut}`))
+      .map(e => e.date);
+    for (const e of log.entries) {
+      if (before.has(`${e.date}|${e.timeIn}|${e.timeOut}`) || e.date === today) continue;
+      const i = fixableDates.indexOf(e.date);
+      if (i >= 0) { fixableDates.splice(i, 1); continue; }
+      return res.status(400).json({ error: `Log a duty on the day you render it. You can’t add one for ${e.date}.` });
+    }
     // Hours set by the AdSO for the scholar's percentage aren't theirs to change.
     const rule = (await dutyRules([req.studentNumber])).get(req.studentNumber);
     if (rule?.requiredHours != null) delete log.requiredHours;
@@ -224,9 +238,9 @@ router.put('/mine', requireSfagScholar, async (req, res) => {
     log.deadline = (await DutySetting.deadlineFor(term)) ?? undefined;
     log.entries = log.entries.map(e => {
       const old = before.get(`${e.date}|${e.timeIn}|${e.timeOut}`);
-      if (!old) return e;
+      if (!old) return { ...e, loggedAt: new Date() };
       before.delete(`${e.date}|${e.timeIn}|${e.timeOut}`);
-      return { ...e, _id: old._id, ...(old.status ? { status: old.status, reviewedBy: old.reviewedBy, reviewedAt: old.reviewedAt, note: old.note } : {}) };
+      return { ...e, _id: old._id, ...(old.loggedAt ? { loggedAt: old.loggedAt } : {}), ...(old.status ? { status: old.status, reviewedBy: old.reviewedBy, reviewedAt: old.reviewedAt, note: old.note } : {}) };
     });
 
     const update = { $set: {}, $unset: {} };

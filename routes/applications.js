@@ -340,7 +340,7 @@ router.post('/', requireStudent, (req, res) => {
       }
 
       // The AdSO can close a scholarship from the admin Scholarships page.
-      const setting = await ScholarshipSetting.findOne({ scholarshipId }).select('status opensOn closesOn').lean();
+      const setting = await ScholarshipSetting.findOne({ scholarshipId }).select('status opensOn closesOn rules').lean();
       if ((setting?.status ?? scholarship.defaultStatus) === 'Closed') {
         return res.status(400).json({ error: 'This scholarship is closed and is no longer accepting applications.' });
       }
@@ -352,6 +352,15 @@ router.post('/', requireStudent, (req, res) => {
       // semester enrollment); the rest of the year is for renewals.
       if (scholarshipId === SFAG_ID && !inSfagApplicationWindow()) {
         return res.status(400).json({ error: SFAG_WINDOW_MESSAGE });
+      }
+
+      // Open only to some programs (e.g. CS and IT): others can't apply.
+      const programs = setting?.rules?.programs;
+      if (Array.isArray(programs) && programs.length) {
+        const applicant = await Student.findOne({ studentNumber }).select('programCode').lean();
+        if (!applicant?.programCode || !programs.includes(applicant.programCode)) {
+          return res.status(403).json({ error: 'This scholarship is only open to students of certain programs, and yours isn’t one of them.' });
+        }
       }
 
       // Scholarships with a fixed number of scholars (POLCA: 2 per college;
