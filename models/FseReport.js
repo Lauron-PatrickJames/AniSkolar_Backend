@@ -15,6 +15,11 @@ const scholarSchema = new mongoose.Schema({
   matriculation: { type: Number, min: 0, required: true },  // tuition and fees
   discount: { type: Number, min: 0, default: 0 },
   allowances: { type: Number, min: 0, default: 0 },         // meal, monthly, dorm, book, other assistance
+  // The same by kind, when the upload had the office's allowance columns.
+  allowanceDetail: {
+    type: new mongoose.Schema({ meal: Number, monthly: Number, dorm: Number, other: Number, book: Number }, { _id: false }),
+    default: undefined,
+  },
   totalDiscount: { type: Number, min: 0, required: true },  // what the FSE counts
   fse: { type: Number, min: 0, required: true },
 }, { _id: false });

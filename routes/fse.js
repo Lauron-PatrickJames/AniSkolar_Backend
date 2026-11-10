@@ -13,6 +13,15 @@ const { CATEGORIES, TERMS, SPECIAL_FUNDING } = FseReport;
 
 const money = v => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v * 100) / 100 : null);
 
+// The allowances by kind (meal, monthly, dorm, other, book): positive amounts only.
+const ALLOWANCE_KINDS = ['meal', 'monthly', 'dorm', 'other', 'book'];
+function allowanceDetail(raw) {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out = {};
+  for (const k of ALLOWANCE_KINDS) { const v = money(raw[k]); if (v) out[k] = v; }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // Returns { report } or { error }.
 function validateReport(body) {
   const academicYear = typeof body.academicYear === 'string' ? body.academicYear.trim() : '';
@@ -43,6 +52,7 @@ function validateReport(body) {
         matriculation,
         discount: money(r.discount) ?? 0,
         allowances: money(r.allowances) ?? 0,
+        allowanceDetail: allowanceDetail(r.allowanceDetail),
         totalDiscount,
         fse: totalDiscount / matriculation,
       });
