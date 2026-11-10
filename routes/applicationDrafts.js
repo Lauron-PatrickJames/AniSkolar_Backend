@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getAuth } = require('@clerk/express');
 const Student = require('../models/Student');
+const { findLinkedStudent } = require('../utils/studentLink');
 const ApplicationDraft = require('../models/ApplicationDraft');
 const { findScholarship } = require('../data/scholarships');
 const { isGrantFormType } = require('../utils/grantForms');
@@ -25,7 +26,7 @@ async function resolveContext(req, res) {
     res.status(404).json({ error: 'Drafts are not available for this scholarship.' });
     return null;
   }
-  const student = await Student.findOne({ clerkId: userId }).select('studentNumber');
+  const student = await findLinkedStudent(userId, () => Student.findOne({ clerkId: userId }).select('studentNumber'));
   if (!student) {
     res.status(404).json({ error: 'Profile not yet completed.' });
     return null;
