@@ -1,5 +1,6 @@
 const { getAuth } = require('@clerk/express');
 const Student = require('../models/Student');
+const { findLinkedStudent } = require('../utils/studentLink');
 const Application = require('../models/Application');
 const Renewal = require('../models/Renewal');
 const { requireAdmin } = require('./requireAdmin');
@@ -15,7 +16,7 @@ async function requireStudent(req, res, next) {
   try {
     const { userId } = getAuth(req) || {};
     if (!userId) return res.status(401).json({ error: 'Not authenticated.' });
-    const student = await Student.findOne({ clerkId: userId }).select('studentNumber').lean();
+    const student = await findLinkedStudent(userId, () => Student.findOne({ clerkId: userId }).select('studentNumber').lean());
     if (!student) return res.status(404).json({ error: 'Complete your profile first.' });
     req.studentNumber = student.studentNumber;
     next();
@@ -66,7 +67,7 @@ async function requireStudentOrAdmin(req, res, next) {
   try {
     const { userId } = getAuth(req) || {};
     if (!userId) return res.status(401).json({ error: 'Not authenticated.' });
-    const student = await Student.findOne({ clerkId: userId }).select('studentNumber').lean();
+    const student = await findLinkedStudent(userId, () => Student.findOne({ clerkId: userId }).select('studentNumber').lean());
     if (student) {
       req.studentNumber = student.studentNumber;
       return next();
