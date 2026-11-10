@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getAuth, clerkClient } = require('@clerk/express');
 const Student = require('../models/Student');
+const { findLinkedStudent } = require('../utils/studentLink');
 const Message = require('../models/Message');
 const Application = require('../models/Application');
 const { findProgram, YEAR_LEVELS } = require('../data/programs');
@@ -309,7 +310,7 @@ router.get('/me', async (req, res) => {
       return res.status(401).json({ error: 'Not authenticated.' });
     }
 
-    const student = await Student.findOne({ clerkId: userId });
+    const student = await findLinkedStudent(userId, () => Student.findOne({ clerkId: userId }));
     if (!student) {
       return res.status(404).json({ error: 'Profile not yet completed.' });
     }
@@ -400,7 +401,7 @@ router.post('/complete-profile', async (req, res) => {
       return res.status(401).json({ error: 'Not authenticated.' });
     }
 
-    const existing = await Student.findOne({ clerkId: userId });
+    const existing = await findLinkedStudent(userId, () => Student.findOne({ clerkId: userId }));
     if (existing) {
       return res.status(409).json({ error: 'Profile already completed.' });
     }
@@ -483,7 +484,7 @@ router.patch('/me', async (req, res) => {
       return res.status(401).json({ error: 'Not authenticated.' });
     }
 
-    const student = await Student.findOne({ clerkId: userId });
+    const student = await findLinkedStudent(userId, () => Student.findOne({ clerkId: userId }));
     if (!student) {
       return res.status(404).json({ error: 'Complete your profile first.' });
     }
@@ -530,7 +531,7 @@ router.post('/me/correction-requests', async (req, res) => {
   try {
     const { userId } = getAuth(req);
     if (!userId) return res.status(401).json({ error: 'Not authenticated.' });
-    const student = await Student.findOne({ clerkId: userId });
+    const student = await findLinkedStudent(userId, () => Student.findOne({ clerkId: userId }));
     if (!student) return res.status(404).json({ error: 'Complete your profile first.' });
 
     const group = req.body?.group;
