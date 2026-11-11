@@ -3,6 +3,7 @@ const router = express.Router();
 const { getAuth, clerkClient } = require('@clerk/express');
 const Student = require('../models/Student');
 const { findLinkedStudent } = require('../utils/studentLink');
+const { computeProfileCompletion, CORE_FIELDS } = require('../utils/profileCompletion');
 const Message = require('../models/Message');
 const Application = require('../models/Application');
 const { findProgram, YEAR_LEVELS } = require('../data/programs');
@@ -48,35 +49,28 @@ const GROUP_FIELDS = {
 };
 const GROUP_LABELS = { program: 'Program', enrollment: 'Year level and section', gpa: 'GPA', personal: 'Personal details' };
 
-// Set once at sign-up; afterwards only the AdSO can change them (the
-// student agrees to this on the sign-up review step and asks for changes
-// with a "personal" correction request).
-const LOCKED_FIELDS = ['firstName', 'lastName', 'middleName', 'nameSuffix', 'dateOfBirth', 'placeOfBirth', 'nationality', 'civilStatus', 'programCode'];
+// Identity details: the student can fill them in (and correct a name the
+// university directory split wrongly) until they've confirmed them by
+// saving a complete Personal details section; afterwards only the AdSO
+// changes them, on a "personal" correction request.
+const IDENTITY_FIELDS = ['firstName', 'lastName', 'middleName', 'nameSuffix', 'dateOfBirth', 'placeOfBirth', 'nationality', 'civilStatus'];
+const PERSONAL_SECTION = ['firstName', 'lastName', 'middleName', 'dateOfBirth', 'placeOfBirth', 'nationality', 'civilStatus'];
+const identityConfirmed = student => !!(student.identityConfirmedAt || student.profileConfirmedAt);
 
-// Required at sign-up: everything except the telephone and suffix, a 1st
-// year's GPA, a deceased parent's contact, and the guardian's details when
-// the guardian is a parent. Mirrors validateDraft() in the frontend's
-// components/profile/profileForm.ts. Returns a message or null.
-const REQUIRED_LABELS = {
-  programCode: 'program', yearLevel: 'year level', section: 'section',
-  firstName: 'first name', lastName: 'last name', middleName: 'middle name',
-  dateOfBirth: 'date of birth', placeOfBirth: 'place of birth', nationality: 'nationality', civilStatus: 'civil status',
-  mobileNumber: 'mobile number', homeAddress: 'street address', province: 'province', cityMunicipality: 'city or municipality',
-  zipCode: 'ZIP code', fatherName: "father's name", motherName: "mother's name", guardianType: 'guardian',
-};
-function missingRequired(data) {
-  const blank = f => data[f] === undefined || data[f] === null || data[f] === '';
-  const missing = Object.keys(REQUIRED_LABELS).filter(blank);
-  if (data.yearLevel !== '1st Year' && blank('gpa')) missing.push('gpa');
-  if (!data.fatherDeceased && blank('fatherContactNo')) missing.push('fatherContactNo');
-  if (!data.motherDeceased && blank('motherContactNo')) missing.push('motherContactNo');
-  if (data.guardianType === 'other') {
-    for (const f of ['guardianName', 'guardianRelationship', 'guardianContactNo']) if (blank(f)) missing.push(f);
-    if (!data.guardianAddressSameAsHome && blank('guardianAddress')) missing.push('guardianAddress');
-  }
-  if (!missing.length) return null;
-  const labels = { gpa: 'GPA', fatherContactNo: "father's contact number", motherContactNo: "mother's contact number", guardianName: "guardian's name", guardianRelationship: "guardian's relationship", guardianContactNo: "guardian's contact number", guardianAddress: "guardian's address", ...REQUIRED_LABELS };
-  return `Please fill in: ${missing.map(f => labels[f]).join(', ')}.`;
+// Onboarding asks only for the core (utils/profileCompletion.js): student
+// number, program, year level and GPA (not for 1st years, who have none
+// yet). Everything else fills in later. Returns a message or null.
+const CORE_LABELS = { programCode: 'program', yearLevel: 'year level', gpa: 'GPA' };
+function missingCore(data) {
+  const missing = CORE_FIELDS(data).filter(f => f !== 'studentNumber' && (data[f] === undefined || data[f] === null || data[f] === ''));
+  return missing.length ? `Please fill in: ${missing.map(f => CORE_LABELS[f]).join(', ')}.` : null;
+}
+
+// The student as the portal gets it: the record plus its completion,
+// computed now (never stored, so it can't go stale).
+function withCompletion(student, extra = {}) {
+  const plain = { ...(typeof student.toObject === 'function' ? student.toObject() : student), ...extra };
+  return { ...plain, completion: computeProfileCompletion(plain) };
 }
 
 const TEXT_LIMIT = 200;
@@ -285,8 +279,10 @@ function lockedChangeError(student, data) {
     if (f === 'dateOfBirth') return (before ? new Date(before).toISOString().slice(0, 10) : '') === (after ? new Date(after).toISOString().slice(0, 10) : '');
     return String(before ?? '').trim().toLowerCase() === String(after ?? '').trim().toLowerCase();
   };
-  // Filling in a detail that was never set (older accounts) is allowed.
-  const changed = LOCKED_FIELDS.filter(f => f in data && String(student[f] ?? '').trim() && !same(f, student[f], data[f]));
+  // Filling in a detail that was never set is always allowed. The program
+  // is set at onboarding; identity details once the student confirmed them.
+  const locked = ['programCode', ...(identityConfirmed(student) ? IDENTITY_FIELDS : [])];
+  const changed = locked.filter(f => f in data && String(student[f] ?? '').trim() && !same(f, student[f], data[f]));
   if (!changed.length) return null;
   return 'Your name, birth details, nationality, civil status and program can only be changed by the Admissions and Scholarship Office. Use “Request a change” on your Profile.';
 }
@@ -319,12 +315,12 @@ router.get('/me', async (req, res) => {
     if (!student.firstName && !student.lastName) {
       try {
         const clerkUser = await clerkClient.users.getUser(userId);
-        return res.json({ student: { ...student.toObject(), ...nameParts(clerkUser) } });
+        return res.json({ student: withCompletion(student, nameParts(clerkUser)) });
       } catch (clerkErr) {
         console.error('Name lookup skipped:', clerkErr);
       }
     }
-    res.json({ student });
+    res.json({ student: withCompletion(student) });
   } catch (err) {
     console.error('Fetch profile error:', err);
     res.status(500).json({ error: 'Failed to fetch profile.' });
@@ -456,11 +452,10 @@ router.post('/complete-profile', async (req, res) => {
     const fromClerk = nameParts(clerkUser);
     if (data.firstName === undefined) data.firstName = fromClerk.firstName;
     if (data.lastName === undefined) data.lastName = fromClerk.lastName;
-    const missing = missingRequired(data);
+    // Only the core is required here; the rest of the profile fills in
+    // later (Profile page, or saved from an application).
+    const missing = missingCore(data);
     if (missing) return res.status(400).json({ error: missing });
-    if (req.body.agreed !== true) {
-      return res.status(400).json({ error: 'Confirm that your details are true and complete before you finish.' });
-    }
 
     const names = {
       firstName: data.firstName,
@@ -471,7 +466,6 @@ router.post('/complete-profile', async (req, res) => {
     const student = new Student({
       clerkId: userId,
       studentNumber,
-      profileConfirmedAt: new Date(),
       ...names,
       name: fullName(names) || 'Student',
       email: primaryEmail.toLowerCase(),
@@ -481,7 +475,7 @@ router.post('/complete-profile', async (req, res) => {
     applyGuardianLinks(student);
     await student.save();
 
-    res.status(201).json({ student });
+    res.status(201).json({ student: withCompletion(student) });
   } catch (err) {
     console.error('Complete profile error:', err);
     res.status(500).json({ error: 'Failed to save profile.' });
@@ -513,8 +507,17 @@ router.patch('/me', async (req, res) => {
       return res.status(409).json({ error: lockedError });
     }
 
+    // Partial updates: only the fields sent are validated and saved.
     Object.assign(student, data);
+    if (['firstName', 'middleName', 'lastName', 'nameSuffix'].some(f => f in data)) {
+      student.name = fullName(student) || student.name;
+    }
     applyGuardianLinks(student);
+    // A complete Personal details section confirms the student's identity
+    // details; from then on only the AdSO changes them.
+    if (!identityConfirmed(student) && PERSONAL_SECTION.every(f => student[f] !== undefined && student[f] !== null && String(student[f]).trim() !== '')) {
+      student.identityConfirmedAt = new Date();
+    }
 
     // Keep the avatar synced with whatever Clerk/Microsoft currently has
     // on file — a no-op fetch cost if it hasn't changed, but means a
@@ -531,7 +534,7 @@ router.patch('/me', async (req, res) => {
 
     await student.save();
 
-    res.json({ student });
+    res.json({ student: withCompletion(student) });
   } catch (err) {
     console.error('Update profile error:', err);
     res.status(500).json({ error: 'Failed to update profile.' });
@@ -566,7 +569,7 @@ router.post('/me/correction-requests', async (req, res) => {
       studentNumber: student.studentNumber, from: 'student', authorEmail: student.email, authorName: student.name,
       body: `Correction request (${GROUP_LABELS[group]}):\n${message}`,
     }).catch(err => console.error('Correction request message failed:', err));
-    res.status(201).json({ student });
+    res.status(201).json({ student: withCompletion(student) });
   } catch (err) {
     console.error('Correction request error:', err);
     res.status(500).json({ error: 'Failed to send the request.' });
@@ -638,8 +641,17 @@ router.patch('/:studentNumber/profile', requireAdso, async (req, res) => {
     if (!student) return res.status(404).json({ error: 'Student not found.' });
     const { data, error } = sanitizeProfileFields(req.body);
     if (error) return res.status(400).json({ error });
+    // Partial updates: only the fields sent are validated and saved.
     Object.assign(student, data);
+    if (['firstName', 'middleName', 'lastName', 'nameSuffix'].some(f => f in data)) {
+      student.name = fullName(student) || student.name;
+    }
     applyGuardianLinks(student);
+    // A complete Personal details section confirms the student's identity
+    // details; from then on only the AdSO changes them.
+    if (!identityConfirmed(student) && PERSONAL_SECTION.every(f => student[f] !== undefined && student[f] !== null && String(student[f]).trim() !== '')) {
+      student.identityConfirmedAt = new Date();
+    }
     if (student.firstName || student.lastName) student.name = fullName(student) || student.name;
     const now = new Date();
     for (const r of student.correctionRequests) {
