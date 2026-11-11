@@ -1,5 +1,5 @@
 const { todayInManila } = require('./dutyHours');
-const { sfagOpenAllYear } = require('./academicYear');
+const { sfagOpenAllYear, inSfagApplicationWindow } = require('./academicYear');
 
 // Application periods are picked as dates (opensOn / closesOn, YYYY-MM-DD,
 // Manila time), never typed. A scholarship takes applications only between
@@ -33,4 +33,19 @@ function windowError(scholarship, setting, now = new Date()) {
   return null;
 }
 
-module.exports = { isDate, isTime, periodOf, windowError, longDate };
+const SFAG_WINDOW_MESSAGE = 'SFAG applications are only accepted in June and July, before the 1st semester enrollment. The rest of the year is for renewals only.';
+
+// Why a scholarship can't be applied for right now, or null: the office
+// closed it, it's outside its application period, or (SFAG) it's not June
+// or July. The one rule for both the application form (POST
+// /api/applications) and the portal, which gets it from GET
+// /api/scholarships (applyBlocks) instead of working it out itself.
+function applyBlock(scholarship, setting, now = new Date()) {
+  if ((setting?.status ?? scholarship?.defaultStatus) === 'Closed') return 'This scholarship is closed and is no longer accepting applications.';
+  const outsidePeriod = windowError(scholarship, setting, now);
+  if (outsidePeriod) return outsidePeriod;
+  if (scholarship?.id === 's1' && !inSfagApplicationWindow(now)) return SFAG_WINDOW_MESSAGE;
+  return null;
+}
+
+module.exports = { isDate, isTime, periodOf, windowError, longDate, applyBlock, SFAG_WINDOW_MESSAGE };

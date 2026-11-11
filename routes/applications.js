@@ -10,11 +10,11 @@ const { openFile, storeFilesInGridFS } = require('../utils/gridfs');
 const Application = require('../models/Application');
 const ApplicationDraft = require('../models/ApplicationDraft');
 const ScholarshipSetting = require('../models/ScholarshipSetting');
-const { windowError } = require('../utils/scholarshipDates');
+const { applyBlock } = require('../utils/scholarshipDates');
 const Student = require('../models/Student');
 const { findScholarship, acceptsOnlineApplications } = require('../data/scholarships');
 const { officeFilter, scopedOffice, partnerLock } = require('../utils/officeScope');
-const { academicYearStartExpr, inSfagApplicationWindow } = require('../utils/academicYear');
+const { academicYearStartExpr } = require('../utils/academicYear');
 const { nextReferenceCode } = require('../utils/referenceCode');
 const { otherScholarshipsHeld } = require('../utils/exclusivity');
 const { queueEmails, processOutbox } = require('../utils/outbox');
@@ -64,8 +64,6 @@ function joinNameParts(partsExpr) {
 }
 
 // Office-use data that applicants never see.
-const SFAG_WINDOW_MESSAGE = 'SFAG applications are only accepted in June and July, before the 1st semester enrollment. The rest of the year is for renewals only.';
-
 const STUDENT_HIDDEN_FIELDS = '-adminFields -officeAssessment -internalNotes -sfagPercentageSetBy';
 const { OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment } = require('../data/officeForms');
 
@@ -339,20 +337,11 @@ router.post('/', requireStudent, (req, res) => {
         return res.status(400).json({ error: `This scholarship doesn't take online applications. Ask the ${by.replace(/^the /i, '')} how it is awarded.` });
       }
 
-      // The AdSO can close a scholarship from the admin Scholarships page.
+      // Closed by its office, outside its application period, or (SFAG)
+      // outside June–July: the same rule the portal shows (applyBlock).
       const setting = await ScholarshipSetting.findOne({ scholarshipId }).select('status opensOn closesOn rules').lean();
-      if ((setting?.status ?? scholarship.defaultStatus) === 'Closed') {
-        return res.status(400).json({ error: 'This scholarship is closed and is no longer accepting applications.' });
-      }
-      // Only between its opening and closing dates.
-      const outsidePeriod = windowError(scholarship, setting);
-      if (outsidePeriod) return res.status(400).json({ error: outsidePeriod });
-
-      // The SFAG takes applications in June and July only (before the 1st
-      // semester enrollment); the rest of the year is for renewals.
-      if (scholarshipId === SFAG_ID && !inSfagApplicationWindow()) {
-        return res.status(400).json({ error: SFAG_WINDOW_MESSAGE });
-      }
+      const blocked = applyBlock(scholarship, setting);
+      if (blocked) return res.status(400).json({ error: blocked });
 
       // Open only to some programs (e.g. CS and IT): others can't apply.
       const programs = setting?.rules?.programs;
@@ -504,6 +493,13 @@ router.patch('/:id', requireStudent, (req, res) => {
       const existing = await Application.findOne({ _id: objectId, studentNumber: req.studentNumber });
       if (!existing) {
         return res.status(404).json({ error: 'Application not found.' });
+      }
+      // A resubmission answers "Needs Revision" and nothing else: it must
+      // not reopen a rejected application or rewrite an approved one
+      // (both would otherwise go back to Under Evaluation). The portal only
+      // offers it then; this enforces it for direct API calls.
+      if (existing.status !== 'Needs Revision') {
+        return res.status(409).json({ error: 'This application can only be changed when the office asks for a revision.' });
       }
 
       const {
@@ -1033,6 +1029,11 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
     // a decision that was already made. Approving from review needs none.
     // (A note-only save re-sends the current status and is unaffected.)
     const note = typeof reviewNote === 'string' ? reviewNote.trim() : '';
+    // An ended scholarship (graduated, stopped or declined) keeps its
+    // Approved decision; undo the end first (PATCH /:id/end) to change it.
+    if (application.endedAt) {
+      return res.status(409).json({ error: `This scholarship ended (${(application.endReason || 'ended').toLowerCase()}). Undo that first to change the decision.` });
+    }
     // Every call records a decision in the history, so re-sending the
     // current status (the old "Save note" button) is refused: it used to
     // add a second identical entry ("Needs revision" twice). A changed
