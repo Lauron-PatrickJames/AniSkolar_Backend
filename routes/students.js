@@ -16,7 +16,7 @@ const ALLOWED_EMAIL_DOMAIN = '@dlsud.edu.ph';
 
 // DLSU-D student numbers: the 4-digit year the student first enrolled at
 // DLSU-D (possibly in high school, kept into college), then 5
-// digits, e.g. 202330864. Same rule as CompleteProfilePage in the frontend.
+// digits, e.g. 202312345. Same rule as CompleteProfilePage in the frontend.
 // The year is NOT the college entry year, so it says nothing about year level.
 function validStudentNumber(value) {
   if (typeof value !== 'string' || !/^\d{9}$/.test(value.trim())) return false;
