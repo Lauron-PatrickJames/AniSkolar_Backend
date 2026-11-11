@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const { requireAdso } = require('../middleware/requireAdmin');
-const { requireSfagScholar, SFAG_ID } = require('../middleware/requireStudent');
+const { requireSfagScholar, requireCurrentSfagScholar, SFAG_ID } = require('../middleware/requireStudent');
 const Application = require('../models/Application');
 const Renewal = require('../models/Renewal');
 const DutyLog = require('../models/DutyLog');
@@ -200,7 +200,7 @@ router.get('/mine', requireSfagScholar, async (req, res) => {
   }
 });
 
-router.put('/mine', requireSfagScholar, async (req, res) => {
+router.put('/mine', requireCurrentSfagScholar, async (req, res) => {
   try {
     const body = req.body || {};
     const { value: term, error: termError } = parseTerm({ academicYear: body.academicYear, term: body.term });
@@ -209,24 +209,41 @@ router.put('/mine', requireSfagScholar, async (req, res) => {
     // its id) as long as its date and times are unchanged; a new or edited
     // duty waits for the head again.
     const existing = await DutyLog.findOne({ studentNumber: req.studentNumber, ...term }).select('entries officeAssigned').lean();
-    const before = new Map((existing?.entries || []).map(e => [`${e.date}|${e.timeIn}|${e.timeOut}`, e]));
+    const keyOf = e => `${e.date}|${e.timeIn}|${e.timeOut}`;
+    const before = new Map((existing?.entries || []).map(e => [keyOf(e), e]));
+    const byId = new Map((existing?.entries || []).map(e => [String(e._id), e]));
     const { log, error } = parseLog(body, { keep: new Set(before.keys()) });
     if (error) return res.status(400).json({ error });
     // Duty is rendered in the office the AdSO assigns: no new duties before
     // that (removing old ones is fine; event claims are separate).
-    if (!existing?.officeAssigned && log.entries.some(e => !before.has(`${e.date}|${e.timeIn}|${e.timeOut}`))) {
+    if (!existing?.officeAssigned && log.entries.some(e => !before.has(keyOf(e)))) {
       return res.status(409).json({ error: 'You can log duties once the scholarship office assigns your office.' });
     }
+    // Each incoming duty is matched to a saved one by its id (the portal
+    // sends it back), else by its date and times (older clients).
+    const used = new Set();
+    const matched = log.entries.map(e => {
+      const old = (e._id && byId.get(e._id)) || before.get(keyOf(e));
+      if (!old || used.has(String(old._id))) return { e, old: null };
+      used.add(String(old._id));
+      return { e, old };
+    });
     // A new duty is logged on the day it's rendered (AdSO, Nov 2026). The
-    // one exception: correcting a duty the head flagged, which keeps its
-    // date (the flagged one is replaced in the same save).
+    // one exception: correcting a duty the head flagged, on its own date.
+    // A saved duty whose times change keeps its id; that's only allowed for
+    // a flagged duty or one from today, and it waits for review again.
     const today = todayInManila();
-    const keptKeys = new Set(log.entries.map(e => `${e.date}|${e.timeIn}|${e.timeOut}`));
+    const keptKeys = new Set(matched.filter(m => m.old).map(m => keyOf(m.old)));
     const fixableDates = (existing?.entries || [])
-      .filter(e => e.status === 'flagged' && !keptKeys.has(`${e.date}|${e.timeIn}|${e.timeOut}`))
+      .filter(e => e.status === 'flagged' && !keptKeys.has(keyOf(e)))
       .map(e => e.date);
-    for (const e of log.entries) {
-      if (before.has(`${e.date}|${e.timeIn}|${e.timeOut}`) || e.date === today) continue;
+    for (const { e, old } of matched) {
+      if (old && keyOf(old) === keyOf(e)) continue;
+      if (old) {
+        if (e.date === today || (old.status === 'flagged' && e.date === old.date)) continue;
+        return res.status(400).json({ error: `You can only change a duty your office flagged, or one from today (${e.date}).` });
+      }
+      if (e.date === today) continue;
       const i = fixableDates.indexOf(e.date);
       if (i >= 0) { fixableDates.splice(i, 1); continue; }
       return res.status(400).json({ error: `Log a duty on the day you render it. You can’t add one for ${e.date}.` });
@@ -236,11 +253,12 @@ router.put('/mine', requireSfagScholar, async (req, res) => {
     if (rule?.requiredHours != null) delete log.requiredHours;
     // The deadline is the AdSO's for the term.
     log.deadline = (await DutySetting.deadlineFor(term)) ?? undefined;
-    log.entries = log.entries.map(e => {
-      const old = before.get(`${e.date}|${e.timeIn}|${e.timeOut}`);
-      if (!old) return { ...e, loggedAt: new Date() };
-      before.delete(`${e.date}|${e.timeIn}|${e.timeOut}`);
-      return { ...e, _id: old._id, ...(old.loggedAt ? { loggedAt: old.loggedAt } : {}), ...(old.status ? { status: old.status, reviewedBy: old.reviewedBy, reviewedAt: old.reviewedAt, note: old.note } : {}) };
+    log.entries = matched.map(({ e, old }) => {
+      const { _id, ...fields } = e;
+      if (!old) return { ...fields, loggedAt: new Date() };
+      // Edited: the same duty (same id), waiting for review again.
+      if (keyOf(old) !== keyOf(e)) return { ...fields, _id: old._id, loggedAt: new Date() };
+      return { ...fields, _id: old._id, ...(old.loggedAt ? { loggedAt: old.loggedAt } : {}), ...(old.status ? { status: old.status, reviewedBy: old.reviewedBy, reviewedAt: old.reviewedAt, note: old.note } : {}) };
     });
 
     const update = { $set: {}, $unset: {} };
@@ -477,12 +495,12 @@ function parseEvent(body) {
 
 // Scholars sign the event's attendance sheet instead; the AdSO credits
 // them from it.
-router.post('/mine/claims', requireSfagScholar, (req, res) => {
+router.post('/mine/claims', requireCurrentSfagScholar, (req, res) => {
   res.status(410).json({ error: 'Sign the attendance sheet at the event. The scholarship office credits you from it.' });
 });
 
 // Unused since the attendance sheets; kept for reference.
-router.post('/mine/claims-legacy', requireSfagScholar, async (req, res) => {
+router.post('/mine/claims-legacy', requireCurrentSfagScholar, async (req, res) => {
   try {
     const eventId = req.body?.eventId;
     if (typeof eventId !== 'string' || !mongoose.Types.ObjectId.isValid(eventId)) return res.status(400).json({ error: 'Choose an event.' });
@@ -506,7 +524,7 @@ router.post('/mine/claims-legacy', requireSfagScholar, async (req, res) => {
   }
 });
 
-router.delete('/mine/claims/:eventId', requireSfagScholar, async (req, res) => {
+router.delete('/mine/claims/:eventId', requireCurrentSfagScholar, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.eventId)) return res.status(400).json({ error: 'Invalid event.' });
     const event = await DutyEvent.findById(req.params.eventId).lean();

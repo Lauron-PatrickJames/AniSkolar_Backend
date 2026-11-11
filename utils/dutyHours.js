@@ -110,7 +110,10 @@ function parseLog(body, { keep = new Set() } = {}) {
     if (minutes(e.timeOut) <= minutes(e.timeIn)) return { error: `Time out must be after time in (${e.date}).` };
     const ruleError = keep.has(`${e.date}|${e.timeIn}|${e.timeOut}`) ? null : dutyRuleError(e);
     if (ruleError) return { error: `${ruleError} (${e.date}, ${e.timeIn}–${e.timeOut})` };
-    out.entries.push({ date: e.date, timeIn: e.timeIn, timeOut: e.timeOut });
+    // The entry's id, when it's one already saved: lets an edit keep its
+    // identity instead of being matched by its date and times.
+    const id = typeof e._id === 'string' && /^[a-f0-9]{24}$/i.test(e._id) ? e._id : undefined;
+    out.entries.push({ ...(id ? { _id: id } : {}), date: e.date, timeIn: e.timeIn, timeOut: e.timeOut });
   }
 
   // Event credit comes from the AdSO's credited events (claims approved by

@@ -411,12 +411,14 @@ router.post('/complete-profile', async (req, res) => {
     // for the verified primary email rather than trusting anything in
     // req.body.
     const clerkUser = await clerkClient.users.getUser(userId);
-    const primaryEmail = clerkUser.emailAddresses.find(
-      e => e.id === clerkUser.primaryEmailAddressId
-    )?.emailAddress;
+    const primary = clerkUser.emailAddresses.find(e => e.id === clerkUser.primaryEmailAddressId);
+    const primaryEmail = primary?.emailAddress;
 
     if (!primaryEmail || !primaryEmail.toLowerCase().endsWith(ALLOWED_EMAIL_DOMAIN)) {
       return res.status(403).json({ error: 'Please use your official university email.' });
+    }
+    if (primary.verification?.status !== 'verified') {
+      return res.status(403).json({ error: 'Verify your university email first.' });
     }
 
     if (!req.body.studentNumber) {
@@ -431,6 +433,19 @@ router.post('/complete-profile', async (req, res) => {
     const duplicate = await Student.findOne({ studentNumber });
     if (duplicate) {
       return res.status(409).json({ error: 'This student number is already linked to another account.' });
+    }
+
+    // An office can add a scholar before they sign up (the SDO's tryouts):
+    // their approved application already sits under this student number,
+    // with the email the office entered. Only that person may claim the
+    // number, so someone who merely knows it can't take over their record.
+    const waiting = await Application.find({ studentNumber }).select('standardInfo.email').lean();
+    if (waiting.length) {
+      const emails = new Set(waiting.map(a => a.standardInfo?.email?.trim().toLowerCase()).filter(Boolean));
+      if (!emails.has(primaryEmail.toLowerCase())) {
+        console.warn(`Blocked claiming student number ${studentNumber}: it has records under a different email.`);
+        return res.status(409).json({ error: 'This student number already has scholarship records under a different DLSU-D email. Sign in with that email, or message the Admissions and Scholarship Office.' });
+      }
     }
 
     const { data, error } = sanitizeProfileFields(req.body);
