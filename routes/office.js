@@ -243,13 +243,17 @@ router.put('/evaluations/:studentNumber', requireOfficeHead, async (req, res) =>
 const Announcement = require('../models/Announcement');
 const { updateEmailQueue, processEmailQueue } = require('../utils/announcementEmails');
 
+// status: 'pending' (waiting for the AdSO), 'published', or 'draft' when
+// the AdSO returned it (review.note says why).
 const announcementView = a => ({
   id: String(a._id), title: a.title, content: a.content, publishedAt: a.publishedAt,
+  status: a.status, createdAt: a.createdAt,
+  review: a.review?.decision || a.review?.requestedStatus ? { decision: a.review.decision ?? null, note: a.review.note ?? null, decidedAt: a.review.decidedAt ?? null } : null,
   emailEnabled: a.emailEnabled, emailStatus: a.emailStatus, emailSent: a.emailSent, emailTotal: a.emailTotal,
 });
 
 async function ownAnnouncements(office) {
-  const docs = await Announcement.find({ dutyOffice: { $ne: null } }).sort({ publishedAt: -1 }).limit(200);
+  const docs = await Announcement.find({ dutyOffice: { $ne: null } }).sort({ createdAt: -1 }).limit(200);
   return docs.filter(d => norm(d.dutyOffice) === norm(office));
 }
 
@@ -276,8 +280,10 @@ router.post('/announcements', requireOfficeHead, async (req, res) => {
       description: content.length > 200 ? `${content.slice(0, 197).trimEnd()}…` : content,
       content,
       category: 'General',
-      status: 'published',
-      publishedAt: new Date(),
+      // Goes out once the AdSO approves it (routes/announcements.js);
+      // the email to the office's scholars waits with it.
+      status: 'pending',
+      review: { requestedStatus: 'published', requestedAt: new Date(), requestedBy: req.officeHead.email },
       dutyOffice: req.officeHead.office,
       createdBy: req.officeHead.email,
       emailEnabled: email,

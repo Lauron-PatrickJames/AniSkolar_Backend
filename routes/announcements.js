@@ -337,6 +337,33 @@ function officeRuleError(req, { scholarshipId, fbEnabled, emailTarget }) {
   return null;
 }
 
+// --- AdSO approval -----------------------------------------------------------
+// Offices other than the AdSO don't publish on their own: asking to publish
+// or schedule (or editing an announcement that's already out) makes it
+// pending, unseen and unemailed, until the AdSO approves it (then it becomes
+// what was asked for) or returns it to a draft with a note.
+const CLIENT_STATUSES = ['draft', 'scheduled', 'published'];
+
+// The review details as plain values (doc.review is a nested path).
+const reviewOf = doc => {
+  const r = doc.review || {};
+  return { requestedStatus: r.requestedStatus, requestedAt: r.requestedAt, requestedBy: r.requestedBy, decision: r.decision, decidedAt: r.decidedAt, decidedBy: r.decidedBy, note: r.note };
+};
+
+function requestApproval(req, doc, wanted) {
+  doc.status = 'pending';
+  doc.review = {
+    requestedStatus: wanted,
+    requestedAt: new Date(),
+    requestedBy: req.adminUser?.email || req.adminUser?.id || req.officeHead?.email,
+  };
+  // Not sent while it waits; queued again once approved.
+  if (doc.emailStatus === 'queued' && !doc.emailSent) {
+    doc.emailStatus = 'not_sent';
+    doc.emailQueuedAt = null;
+  }
+}
+
 // --- Routes -----------------------------------------------------------------
 
 // GET /api/announcements
@@ -426,7 +453,7 @@ router.post('/', requireAdmin, withImageUpload, async (req, res) => {
     }
     const related = req.body.scholarshipId === undefined ? { value: null } : parseScholarshipId(req.body.scholarshipId);
     if (related.error) return res.status(400).json({ error: related.error });
-    if (status !== undefined && !Announcement.STATUSES.includes(status)) {
+    if (status !== undefined && !CLIENT_STATUSES.includes(status)) {
       return res.status(400).json({ error: 'Status must be draft, scheduled or published.' });
     }
     const willPublish = status === 'published';
@@ -461,6 +488,10 @@ router.post('/', requireAdmin, withImageUpload, async (req, res) => {
       await discardUnsaved(newImages);
       return res.status(403).json({ error: ruleError });
     }
+    if (!isAdsoUser(req) && ['published', 'scheduled'].includes(doc.status)) {
+      requestApproval(req, doc, doc.status);
+      doc.publishedAt = null;
+    }
 
     const validationError = await doc.validate().then(() => null, err => err);
     if (validationError) {
@@ -487,6 +518,70 @@ router.post('/', requireAdmin, withImageUpload, async (req, res) => {
 // announcement can't be scheduled. The Facebook post follows:
 // text edits update it, changed images recreate it, unpublishing or turning
 // fbEnabled off deletes it.
+// GET /api/announcements/review — the AdSO: every office's announcement
+// waiting for approval (scholarship offices and duty offices), oldest first.
+router.get('/review', requireAdso, async (req, res) => {
+  try {
+    const docs = await Announcement.find({ status: 'pending' }).sort({ 'review.requestedAt': 1, createdAt: 1 });
+    res.json({ announcements: docs.map(d => d.toClientShape()) });
+  } catch (err) {
+    console.error('Load announcements to review error:', err);
+    res.status(500).json({ error: 'Failed to load the announcements to review.' });
+  }
+});
+
+async function pendingFor(req, res) {
+  const objectId = toObjectId(req.params.id);
+  if (!objectId) { res.status(400).json({ error: 'Invalid announcement id.' }); return null; }
+  const doc = await Announcement.findById(objectId);
+  if (!doc) { res.status(404).json({ error: 'Announcement not found.' }); return null; }
+  if (doc.status !== 'pending') { res.status(409).json({ error: 'This announcement isn’t waiting for approval (it may have been changed or taken back).' }); return null; }
+  return doc;
+}
+
+// POST /api/announcements/:id/approve — the AdSO: it goes out as the office
+// asked (published now, or scheduled; a schedule already past publishes now).
+router.post('/:id/approve', requireAdso, async (req, res) => {
+  try {
+    const doc = await pendingFor(req, res);
+    if (!doc) return;
+    const now = new Date();
+    if (doc.review?.requestedStatus === 'scheduled' && doc.scheduledFor && doc.scheduledFor > now) {
+      doc.status = 'scheduled';
+    } else {
+      doc.status = 'published';
+      doc.scheduledFor = null;
+      doc.publishedAt = doc.publishedAt || now;
+    }
+    doc.review = { ...reviewOf(doc), decision: 'approved', decidedAt: now, decidedBy: req.adminUser.email || req.adminUser.id, note: undefined };
+    const facebookResult = await saveAndSync(doc);
+    sendSaved(res, 200, doc, facebookResult);
+  } catch (err) {
+    console.error('Approve announcement error:', err);
+    res.status(500).json({ error: 'Failed to approve the announcement.' });
+  }
+});
+
+// POST /api/announcements/:id/return { note } — the AdSO: back to the
+// office as a draft, with what to change.
+router.post('/:id/return', requireAdso, async (req, res) => {
+  try {
+    const note = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
+    if (!note) return res.status(400).json({ error: 'Tell the office what to change.' });
+    if (note.length > 1000) return res.status(400).json({ error: 'Keep the note under 1,000 characters.' });
+    const doc = await pendingFor(req, res);
+    if (!doc) return;
+    doc.status = 'draft';
+    doc.scheduledFor = doc.review?.requestedStatus === 'scheduled' ? doc.scheduledFor : null;
+    doc.review = { ...reviewOf(doc), decision: 'returned', decidedAt: new Date(), decidedBy: req.adminUser.email || req.adminUser.id, note };
+    await doc.save();
+    res.json({ announcement: doc.toClientShape() });
+  } catch (err) {
+    console.error('Return announcement error:', err);
+    res.status(500).json({ error: 'Failed to return the announcement.' });
+  }
+});
+
 router.patch('/:id', requireAdmin, withImageUpload, async (req, res) => {
   const newImages = [];
   try {
@@ -519,10 +614,10 @@ router.patch('/:id', requireAdmin, withImageUpload, async (req, res) => {
       if (audience.target) existing.emailTarget = audience.target;
     }
 
-    if (status !== undefined && !Announcement.STATUSES.includes(status)) {
+    if (status !== undefined && !CLIENT_STATUSES.includes(status)) {
       return res.status(400).json({ error: 'Status must be draft, scheduled or published.' });
     }
-    const nextStatus = status ?? existing.status;
+    const nextStatus = status ?? (existing.status === 'pending' ? existing.review?.requestedStatus ?? 'published' : existing.status);
     if (nextStatus === 'scheduled') {
       if (existing.status === 'published') {
         return res.status(409).json({ error: 'This announcement is already published. Unpublish it to a draft first.' });
@@ -544,6 +639,18 @@ router.patch('/:id', requireAdmin, withImageUpload, async (req, res) => {
 
     const ruleError = officeRuleError(req, { scholarshipId: existing.scholarshipId, fbEnabled: existing.fbEnabled, emailTarget: existing.emailEnabled && !started ? targetOf(existing) : null });
     if (ruleError) return res.status(403).json({ error: ruleError });
+    // An office's announcement that would be (or stay) out: the AdSO
+    // approves this version first. A pending one edited stays pending, as
+    // a new request; one taken back to a draft is simply a draft.
+    if (!isAdsoUser(req)) {
+      const wanted = existing.status === 'pending' ? (status ?? existing.review?.requestedStatus ?? 'published') : existing.status;
+      if (['published', 'scheduled'].includes(wanted)) {
+        requestApproval(req, existing, wanted);
+        if (wanted === 'published' && existing.publishedAt && status === 'published') existing.publishedAt = null;
+      } else if (wanted === 'draft' && existing.review?.requestedStatus) {
+        existing.review = { ...reviewOf(existing), requestedStatus: undefined, requestedAt: undefined };
+      }
+    }
 
     const keep = parseKeepImageIds(req.body.keepImageIds);
     if (keep.error) return res.status(400).json({ error: keep.error });
@@ -681,5 +788,6 @@ router.delete('/:id', requireAdmin, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.requestApproval = requestApproval;
 module.exports.publishDueAnnouncements = publishDueAnnouncements;
 module.exports.processEmailQueue = processEmailQueue;
