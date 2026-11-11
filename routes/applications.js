@@ -82,10 +82,6 @@ function checkOfficeStep(scholarshipId, standardInfo, labels) {
   return answers;
 }
 
-// The applicant's name on an application always comes from their Student
-// record (first and last from the university account, middle from the
-// profile) — never from what the form sent, and never split from a full
-// name. Records without name parts yet are left as submitted.
 // Whether the signed-in student / admin may read a stored file: it must be
 // on one of the student's own applications or renewals, or (admins) on an
 // application or renewal within their office's scope.
@@ -104,8 +100,16 @@ async function canReadDocument(req, fileId) {
   return !office || findScholarship(renewal.scholarshipId)?.office === office;
 }
 
+// The applicant's name on an application comes from their Student record
+// once the student has confirmed it (a complete Personal details section,
+// or the old full sign-up), so every application of a student shows the
+// same, AdSO-corrected name. Until then (a new student whose name is still
+// the university directory's, possibly split wrongly) the name typed on
+// the form is kept. Either way it's stamped at submission: the application
+// keeps what was submitted, and later profile edits don't change it.
 async function stampStudentNames(studentNumber, application) {
-  const student = await Student.findOne({ studentNumber }).select('firstName middleName lastName').lean();
+  const student = await Student.findOne({ studentNumber }).select('firstName middleName lastName identityConfirmedAt profileConfirmedAt').lean();
+  if (!student?.identityConfirmedAt && !student?.profileConfirmedAt) return;
   if (!student?.firstName || !student?.lastName) return;
   const middle = (student.middleName || '').trim();
   if (application.standardInfo) {

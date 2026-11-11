@@ -43,8 +43,13 @@ const studentSchema = new mongoose.Schema({
     firstName: { type: String, trim: true },
     middleName: { type: String, trim: true },
     // When the student confirmed their details at sign-up (identity
-    // details are locked from then on).
+    // details are locked from then on). Accounts from the old full sign-up.
     profileConfirmedAt: Date,
+    // When the student first saved a complete Personal details section
+    // (name, birth details, nationality, civil status). From then on those
+    // are locked like profileConfirmedAt; until then the student can still
+    // correct a name the university directory split wrongly.
+    identityConfirmedAt: Date,
     nameSuffix: { type: String, enum: [...NAME_SUFFIXES, ''] },
     lastName: { type: String, trim: true },
     // Course name and college are taken from the program list
