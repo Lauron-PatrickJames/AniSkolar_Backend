@@ -6,7 +6,10 @@ const mongoose = require('mongoose');
 // AnnouncementCard simply ignores since it only reads the fields it knows.
 
 const CATEGORIES = ['General', 'Update', 'Deadline', 'Event'];
-const STATUSES = ['draft', 'scheduled', 'published'];
+// pending: an office other than the AdSO asked to publish (or schedule)
+// it; it waits, unseen and unemailed, until the AdSO approves it (then it
+// becomes review.requestedStatus) or returns it (back to draft, with a note).
+const STATUSES = ['draft', 'pending', 'scheduled', 'published'];
 const MAX_IMAGES = 10;
 
 const imageSchema = new mongoose.Schema(
@@ -59,6 +62,18 @@ const announcementSchema = new mongoose.Schema(
     scheduledFor: {
       type: Date,
       default: null
+    },
+    // The AdSO's approval of an office's announcement (see STATUSES).
+    // requestedStatus: what the office asked for. decision: the AdSO's last
+    // answer; note: why it was returned.
+    review: {
+      requestedStatus: { type: String, enum: ['published', 'scheduled'] },
+      requestedAt: Date,
+      requestedBy: String,
+      decision: { type: String, enum: ['approved', 'returned'] },
+      decidedAt: Date,
+      decidedBy: String,
+      note: { type: String, maxlength: 1000 },
     },
     // Admin-only: surfaces above the regular feed order when true. Not part
     // of the frontend Announcement type.
@@ -198,6 +213,15 @@ announcementSchema.methods.toClientShape = function toClientShape() {
     // Admin extensions — present for the admin dashboard, harmless extra
     // keys for the student portal.
     status: this.status,
+    review: this.review?.requestedStatus || this.review?.decision ? {
+      requestedStatus: this.review.requestedStatus ?? null,
+      requestedAt: this.review.requestedAt ?? null,
+      requestedBy: this.review.requestedBy ?? null,
+      decision: this.review.decision ?? null,
+      decidedAt: this.review.decidedAt ?? null,
+      decidedBy: this.review.decidedBy ?? null,
+      note: this.review.note ?? null,
+    } : null,
     isPinned: this.isPinned,
     publishedAt: this.publishedAt,
     scheduledFor: this.scheduledFor,
