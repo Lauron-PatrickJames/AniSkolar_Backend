@@ -582,6 +582,11 @@ router.patch('/admin/:id/status', requireAdmin, async (req, res) => {
     if (status === renewal.status) {
       return res.status(409).json({ error: `This renewal is already ${status}. Choose a different decision to change it.` });
     }
+    // The scholar said they're not continuing: the office can't renew (or
+    // refuse) that on their behalf, only send it back to them to redo.
+    if (renewal.status === 'Not Continuing' && status !== 'Needs Revision') {
+      return res.status(409).json({ error: 'The scholar said they’re not continuing. Ask for a revision if they need to change that.' });
+    }
     if (!note) {
       if (status === 'Needs Revision' || status === 'Not Renewed') {
         return res.status(400).json({ error: 'Add a message to the scholar explaining what to do or why.' });

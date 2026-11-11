@@ -4,6 +4,7 @@ const { findLinkedStudent } = require('../utils/studentLink');
 const Application = require('../models/Application');
 const Renewal = require('../models/Renewal');
 const { requireAdmin } = require('./requireAdmin');
+const { findHeldScholarships } = require('../utils/exclusivity');
 
 // The Student Financial Aid Grant (SFAG) — the only scholarship with duty
 // hours.
@@ -63,6 +64,23 @@ const requireSfagScholar = [requireStudent, async (req, res, next) => {
 // A student (sets req.studentNumber) or an admin (sets req.adminUser), for
 // routes both use; the route then checks the record is theirs. Admin
 // accounts have no Student record.
+// Holds the SFAG *now*: approved, not ended (graduated, stopped or declined
+// for another scholarship) and not left unrenewed. requireSfagScholar above
+// is "was ever an SFAG scholar", enough to read past duty hours; logging
+// duties and claiming events needs this.
+const requireCurrentSfagScholar = [requireStudent, async (req, res, next) => {
+  try {
+    const held = await findHeldScholarships(req.studentNumber);
+    if (!held.some(s => s.scholarshipId === SFAG_ID)) {
+      return res.status(403).json({ error: 'You no longer hold the Student Financial Aid Grant (SFAG), so you can’t log duty hours.' });
+    }
+    next();
+  } catch (err) {
+    console.error('Current SFAG check failed:', err);
+    res.status(500).json({ error: 'Failed to verify your scholarship.' });
+  }
+}];
+
 async function requireStudentOrAdmin(req, res, next) {
   try {
     const { userId } = getAuth(req) || {};
@@ -79,4 +97,4 @@ async function requireStudentOrAdmin(req, res, next) {
   }
 }
 
-module.exports = { requireStudent, requireScholar, requireSfagScholar, requireStudentOrAdmin, SFAG_ID };
+module.exports = { requireStudent, requireScholar, requireSfagScholar, requireCurrentSfagScholar, requireStudentOrAdmin, SFAG_ID };

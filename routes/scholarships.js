@@ -35,7 +35,7 @@ const CHOICE_LIST_FIELDS = ['customEligibility', 'customDocuments'];
 const CATEGORIES = ['Academic', 'Financial', 'Athletic', 'Leadership', 'Others'];
 const { OFFICE_CODES: OFFICES } = require('../data/offices');
 const TEXT_LIMITS = { deadline: 200, description: 4000, submissionNote: 500, schedule: 300, scheduleVenue: 150 };
-const { isDate, isTime, periodOf } = require('../utils/scholarshipDates');
+const { isDate, isTime, periodOf, applyBlock } = require('../utils/scholarshipDates');
 
 // Picked dates (YYYY-MM-DD) and a time (HH:MM). Returns an error or null.
 function parseDates(body, set, unset, current = {}) {
@@ -61,8 +61,17 @@ const LIST_MAX_ITEMS = 30;
 router.get('/', async (req, res) => {
   try {
     const settings = await ScholarshipSetting.find({});
+    // applyBlocks: per scholarship, why it can't be applied for right now
+    // (message, or null) and the dates that answer was worked out from, so
+    // the portal shows what the form enforces (while its dates match).
+    const byId = new Map(settings.map(s => [s.scholarshipId, s]));
+    const now = new Date();
+    const applyBlocks = Object.fromEntries(allScholarships().map(s => {
+      const setting = byId.get(s.id);
+      return [s.id, { message: applyBlock(s, setting, now), ...periodOf(s, setting) }];
+    }));
     // sfagOpenAllYear: the June–July SFAG limit is lifted (SFAG_OPEN_ALL_YEAR).
-    res.json({ scholarships: settings.map(s => s.toOverrides()), sfagOpenAllYear: sfagOpenAllYear() });
+    res.json({ scholarships: settings.map(s => s.toOverrides()), applyBlocks, sfagOpenAllYear: sfagOpenAllYear() });
   } catch (err) {
     console.error('Load scholarship settings error:', err);
     res.status(500).json({ error: 'Failed to load scholarships.' });
