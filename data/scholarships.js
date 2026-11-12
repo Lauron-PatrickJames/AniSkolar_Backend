@@ -32,6 +32,10 @@
 // or stop, which their office records on the application (PATCH
 // /api/applications/:id/end). No renewal periods can be opened for it.
 //
+// oneSemester (always with noRenewal): a grant for one semester only, e.g.
+// the USG's SFAG: it counts until the end of the semester it was approved
+// for (utils/semester.js), then the student applies again in the next call.
+//
 // slotsPerCollege: at most this many current scholars per college; a full
 // college can't apply or be approved (utils/collegeSlots.js).
 // totalSlots: at most this many current scholars in all (campus-wide).
@@ -129,20 +133,22 @@ const SCHOLARSHIPS = [
   { id: 's7', defaultStatus: 'Closed', name: 'Athletic Scholarship', office: 'SDO', formType: 'standard', referenceCode: 'ATH', applicationMode: 'info', noRenewal: true, directAward: true },
   { id: 's8', defaultStatus: 'Closed', name: 'Vicissitude Scholarship Program', office: 'VICISSITUDE', formType: 'standard', referenceCode: 'VIC' },
   // s9 (Performing Arts Group) was removed: PAG declined to partner with AniSkolar.
-  { id: 's10', defaultStatus: 'Closed', name: '267th NROTC Scholarship', office: 'ROTC', formType: 'standard', referenceCode: 'ROTC' },
-  { id: 's11', defaultStatus: 'Closed', name: 'USG Student Financial Aid Grant', office: 'USG', formType: 'standard', referenceCode: 'USGF' },
+  // The ROTC Office adds its officers itself each semester, at their
+  // current rank (the rank sets the amount): no application, no renewals.
+  { id: 's10', defaultStatus: 'Closed', name: '267th NROTC Scholarship', office: 'ROTC', formType: 'standard', referenceCode: 'ROTC', applicationMode: 'info', directAward: true, noRenewal: true, oneSemester: true },
+  { id: 's11', defaultStatus: 'Closed', name: 'USG Student Financial Aid Grant', office: 'USG', formType: 'standard', referenceCode: 'USGF', noRenewal: true, oneSemester: true },
   { id: 's12', defaultStatus: 'Closed', name: 'Heraldo Filipino Scholarship', office: 'HERALDO', formType: 'standard', referenceCode: 'HF' },
   // CBAASG Ordinance No. 01, s. 2021–2022: for CBAA students only (the
   // office can change the programs; its saved rules then apply instead).
   { id: 's13', defaultStatus: 'Closed', name: 'CBAASG Achie Scholarship', office: 'CBAASG', formType: 'standard', referenceCode: 'ACHIE', programs: CBAA_PROGRAMS },
   { id: 's14', defaultStatus: 'Closed', name: 'CBAASG Officers’ Partial Scholarship', office: 'CBAASG', formType: 'standard', referenceCode: 'CBAO', programs: CBAA_PROGRAMS },
   // CICSSG's Padayon Pioneers: two grantees, CICS students only.
-  { id: 's15', defaultStatus: 'Closed', name: 'Padayon Pioneers: CICS Student Financial Aid Grant', office: 'CICSSG', formType: 'standard', referenceCode: 'PADAYON', programs: CICS_PROGRAMS, totalSlots: 2 },
+  { id: 's15', defaultStatus: 'Closed', name: 'Padayon Pioneers: CICS Student Financial Aid Grant', office: 'CICSSG', formType: 'standard', referenceCode: 'PADAYON', programs: CICS_PROGRAMS, totalSlots: 2, noRenewal: true, oneSemester: true },
   // CEATSG Ordinance No. 02, s. 2025–2026: CEAT students only; the
   // semester's numbers are set by the office (Scholarship Criteria Resolution).
-  { id: 's16', defaultStatus: 'Closed', name: 'CEAT Financial Aid Scholarship', office: 'CEATSG', formType: 'standard', referenceCode: 'CEAT', programs: CEAT_PROGRAMS },
+  { id: 's16', defaultStatus: 'Closed', name: 'CEAT Financial Aid Scholarship', office: 'CEATSG', formType: 'standard', referenceCode: 'CEAT', programs: CEAT_PROGRAMS, noRenewal: true, oneSemester: true },
   // CCJESG Ordinance No. 251125: its officers' grant, at most 11 officers.
-  { id: 's17', defaultStatus: 'Closed', name: 'CCJESG Officers’ Financial Grant', office: 'CCJESG', formType: 'standard', referenceCode: 'CCJE', programs: CCJE_PROGRAMS, totalSlots: 11 },
+  { id: 's17', defaultStatus: 'Closed', name: 'CCJESG Officers’ Financial Grant', office: 'CCJESG', formType: 'standard', referenceCode: 'CCJE', programs: CCJE_PROGRAMS, totalSlots: 11, noRenewal: true, oneSemester: true },
 ];
 
 // Built-in scholarships, then the ones the AdSO created (standard form;

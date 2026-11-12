@@ -2,6 +2,7 @@ const Application = require('../models/Application');
 const Renewal = require('../models/Renewal');
 const { academicYearStart } = require('./academicYear');
 const { findScholarship } = require('../data/scholarships');
+const { semesterEnd } = require('./semester');
 
 // One internally funded scholarship at a time (AdSO interview, Oct 2026).
 // Every scholarship in AniSkolar is internally funded. A student may apply
@@ -23,6 +24,8 @@ const EXCLUSIVE_NAME = 'SFAG';
 // unless the latest decision on it is Not Renewed / Not Continuing.
 // Scholarships without renewals (noRenewal, e.g. POLCA) count from
 // approval until the office marks the scholar Graduated / Stopped.
+// One-semester grants (oneSemester, e.g. the USG's SFAG) count only until
+// the end of the semester they were approved for, or until stopped.
 // Returns [{ scholarshipId, scholarshipName }].
 async function findHeldScholarships(studentNumber, { excludeApplicationId, now = new Date() } = {}) {
   const fromYear = academicYearStart(now) - 1;
@@ -41,7 +44,14 @@ async function findHeldScholarships(studentNumber, { excludeApplicationId, now =
   };
   for (const a of applications) {
     const approvedAt = new Date(a.reviewedAt || a.createdAt);
-    if (findScholarship(a.scholarshipId)?.noRenewal) {
+    const scholarship = findScholarship(a.scholarshipId);
+    if (scholarship?.oneSemester) {
+      const ends = semesterEnd(approvedAt);
+      consider(a.scholarshipId, a.scholarshipName, approvedAt, now < ends);
+      if (a.endedAt) consider(a.scholarshipId, a.scholarshipName, new Date(a.endedAt), false);
+      continue;
+    }
+    if (scholarship?.noRenewal) {
       consider(a.scholarshipId, a.scholarshipName, approvedAt, true);
       if (a.endedAt) consider(a.scholarshipId, a.scholarshipName, new Date(a.endedAt), false);
       continue;
