@@ -64,6 +64,27 @@ describe('office admins', () => {
   });
 });
 
+describe('office to office', () => {
+  test('POLCA reads its conversation with the AdSO', async () => {
+    const res = await call(a, 'GET', '/api/messages/admin/peers/lso', { user: 'polca' });
+    assert.equal(res.status, 200, res.body.error);
+    const [, filter] = calls.find(c => c[0] === 'find');
+    assert.equal(filter.peer, 'LSO|POLCA');
+  });
+
+  test('an office can\'t open a conversation with itself', async () => {
+    const res = await call(a, 'GET', '/api/messages/admin/peers/POLCA', { user: 'polca' });
+    assert.equal(res.status, 404);
+  });
+
+  test('their messages are shown as the other office\'s', async () => {
+    Message.find = () => query([{ _id: 'm1', peer: 'LSO|POLCA', fromOffice: 'LSO', from: 'adso', authorName: 'Ana', body: 'hi', attachments: [], createdAt: new Date() }]);
+    const res = await call(a, 'GET', '/api/messages/admin/peers/LSO', { user: 'polca' });
+    assert.equal(res.body.messages[0].from, 'office');
+    assert.match(res.body.messages[0].authorName, /AdSO/);
+  });
+});
+
 describe('students', () => {
   test('reading a conversation with POLCA', async () => {
     const res = await call(a, 'GET', '/api/messages/mine?office=polca', { user: 'stud' });

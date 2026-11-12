@@ -23,6 +23,10 @@ const messageSchema = new mongoose.Schema({
   // 'POLCA'): each office has its own inbox. Unset on older messages,
   // which are the AdSO's. See routes/messages.js.
   inbox: { type: String, trim: true, maxlength: 40 },
+  // A conversation between two scholarship offices: both codes, sorted
+  // ("LSO|POLCA"), and which one wrote this message (from is 'adso').
+  peer: { type: String, trim: true, maxlength: 100, index: true },
+  fromOffice: { type: String, trim: true, maxlength: 40 },
   from: { type: String, enum: ['student', 'adso', 'office'], required: true },
   authorEmail: String,
   authorName: String,
