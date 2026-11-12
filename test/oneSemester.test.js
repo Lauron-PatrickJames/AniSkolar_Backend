@@ -11,9 +11,9 @@ const { semesterEnd } = require('../utils/semester');
 const { findHeldScholarships } = require('../utils/exclusivity');
 const { SCHOLARSHIPS } = require('../data/scholarships');
 
-const ONE_SEMESTER = ['s10', 's11', 's15', 's16', 's17'];
+const ONE_SEMESTER = ['s8', 's10', 's11', 's15', 's16', 's17'];
 // The ones students apply for (the ROTC's officers are added by the office).
-const APPLIED_FOR = ['s11', 's15', 's16', 's17'];
+const APPLIED_FOR = ['s8', 's11', 's15', 's16', 's17'];
 // Manila midnight is 16:00 UTC the day before.
 const at = iso => new Date(iso);
 
@@ -92,7 +92,7 @@ describe('held scholarships', () => {
 describe('renewal periods', () => {
   const renewals = require('../routes/renewals');
   const a = app(renewals, '/api/renewals');
-  const OFFICE = { s11: 'USG', s15: 'CICSSG', s16: 'CEATSG', s17: 'CCJESG' };
+  const OFFICE = { s8: 'VICISSITUDE', s11: 'USG', s15: 'CICSSG', s16: 'CEATSG', s17: 'CCJESG' };
 
   for (const id of APPLIED_FOR) {
     test(`${id}: no renewal period can be opened`, async () => {

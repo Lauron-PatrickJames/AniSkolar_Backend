@@ -131,7 +131,9 @@ const SCHOLARSHIPS = [
   // and no renewals. It adds each one itself (POST
   // /api/applications/direct-award) with the coach's document.
   { id: 's7', defaultStatus: 'Closed', name: 'Athletic Scholarship', office: 'SDO', formType: 'standard', referenceCode: 'ATH', applicationMode: 'info', noRenewal: true, directAward: true },
-  { id: 's8', defaultStatus: 'Closed', name: 'Vicissitude Scholarship Program', office: 'VICISSITUDE', formType: 'standard', referenceCode: 'VIC' },
+  // One semester at a time: members apply each term with that term's
+  // performance evaluation and duty hours record.
+  { id: 's8', defaultStatus: 'Closed', name: 'Vicissitude Scholarship Program', office: 'VICISSITUDE', formType: 'standard', referenceCode: 'VIC', noRenewal: true, oneSemester: true },
   // s9 (Performing Arts Group) was removed: PAG declined to partner with AniSkolar.
   // The ROTC Office adds its officers itself each semester, at their
   // current rank (the rank sets the amount): no application, no renewals.
