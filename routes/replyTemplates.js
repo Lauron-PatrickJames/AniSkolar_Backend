@@ -106,10 +106,11 @@ router.delete('/:id', requireAdmin, async (req, res) => {
   try {
     const t = await findOwn(req, res);
     if (!t) return;
-    t.deletedAt = new Date();
     t.updatedBy = req.adminUser.email || req.adminUser.id;
     await t.save();
-    res.json({ deleted: true });
+    // To the Trash for 30 days (it stays a hidden record; see utils/trash.js).
+    await require('../utils/trash').moveToTrash({ kind: 'replyTemplate', doc: t, title: `Template: ${t.title}`, office: t.office, by: req.adminUser });
+    res.json({ deleted: true, trashed: true });
   } catch (err) {
     console.error('Delete reply template error:', err);
     res.status(500).json({ error: 'Failed to delete the template.' });

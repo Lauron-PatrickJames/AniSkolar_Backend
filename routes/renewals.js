@@ -486,7 +486,7 @@ router.get('/admin/periods/:id/scholars', requireAdmin, async (req, res) => {
       };
     });
 
-    res.json({ period: periodView(period), passingAverage: PASSING_AVERAGE, scholars, dutyTerm: duty.term });
+    res.json({ period: periodView(period), passingAverage: await require('../models/DutySetting').passingAverage(), scholars, dutyTerm: duty.term });
   } catch (err) {
     console.error('Load renewal scholars error:', err);
     res.status(500).json({ error: 'Failed to load scholars for this renewal.' });

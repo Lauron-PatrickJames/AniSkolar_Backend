@@ -350,10 +350,21 @@ router.get('/admin/settings', requireAdso, async (req, res) => {
 router.put('/admin/settings', requireAdso, async (req, res) => {
   try {
     const input = req.body?.hoursByGroup;
-    if (!input || typeof input !== 'object') return res.status(400).json({ error: 'Enter the hours for each grant percentage.' });
-    const $set = { hoursSaved: true, updatedBy: req.adminUser.email || req.adminUser.id };
+    const passing = req.body?.passingAverage;
+    if ((!input || typeof input !== 'object') && passing === undefined) return res.status(400).json({ error: 'Enter the hours for each grant percentage.' });
+    const $set = { updatedBy: req.adminUser.email || req.adminUser.id };
     const $unset = {};
-    for (const g of DutySetting.YEAR_GROUPS) {
+    // The evaluation average renewals need (null = back to 4).
+    if (passing !== undefined) {
+      if (passing === null || passing === '') $unset.passingAverage = '';
+      else {
+        const n = Number(passing);
+        if (!Number.isFinite(n) || n < 1 || n > 5) return res.status(400).json({ error: 'The passing evaluation average must be between 1.00 and 5.00.' });
+        $set.passingAverage = Math.round(n * 100) / 100;
+      }
+    }
+    if (input && typeof input === 'object') $set.hoursSaved = true;
+    for (const g of (input && typeof input === 'object' ? DutySetting.YEAR_GROUPS : [])) {
       const group = input[g] && typeof input[g] === 'object' ? input[g] : {};
       const label = g === 'lower' ? '1st–2nd year' : '3rd year and up';
       for (const p of DutySetting.GRANT_PERCENTAGES) {
@@ -623,10 +634,16 @@ router.delete('/admin/events/:id', requireAdso, async (req, res) => {
     if (await DutyLog.exists({ eventClaims: { $elemMatch: { event: event._id, status: 'Approved' } } })) {
       return res.status(409).json({ error: 'Scholars have been credited for this event. Reject their claims first if it should be removed.' });
     }
+    // Scholars' pending claims for it: removed now, put back on restore.
+    const logs = await DutyLog.find({ 'eventClaims.event': event._id }).select('eventClaims').lean();
+    const claims = logs.flatMap(l => l.eventClaims.filter(c => String(c.event) === String(event._id)).map(claim => ({ logId: l._id, claim })));
     await DutyLog.updateMany({ 'eventClaims.event': event._id }, { $pull: { eventClaims: { event: event._id } } });
-    await DutyEvent.deleteOne({ _id: event._id });
-    for (const s of event.sheets || []) await deleteFile(s.fileId).catch(err => console.error('Failed to delete an attendance sheet:', err.message));
-    res.json({ deleted: true });
+    // To the Trash for 30 days; the signed sheets stay until then.
+    await require('../utils/trash').moveToTrash({
+      kind: 'dutyEvent', doc: event, title: `${event.name} (${event.date})`, office: 'LSO',
+      files: (event.sheets || []).map(s => s.fileId), extra: { claims }, by: req.adminUser,
+    });
+    res.json({ deleted: true, trashed: true });
   } catch (err) {
     console.error('Delete duty event error:', err);
     res.status(500).json({ error: 'Failed to delete the event.' });
@@ -730,9 +747,18 @@ router.delete('/admin/events/:id/sheets/:fileId', requireAdso, async (req, res) 
     if (!event) return;
     const sheet = event.sheets.find(s => String(s.fileId) === req.params.fileId);
     if (!sheet) return res.status(404).json({ error: 'Sheet not found.' });
+    const data = sheet.toObject ? sheet.toObject() : sheet;
     event.sheets = event.sheets.filter(s => s !== sheet);
     await event.save();
-    await deleteFile(sheet.fileId).catch(err => console.error('Failed to delete an attendance sheet:', err.message));
+    // To the Trash for 30 days: the file stays until then.
+    const TrashItem = require('../models/TrashItem');
+    const now = new Date();
+    await TrashItem.create({
+      kind: 'attendanceSheet', title: `Attendance sheet: ${event.name} (${data.filename || 'file'})`, office: 'LSO',
+      data, extra: { eventId: event._id }, files: [data.fileId],
+      deletedAt: now, deletedBy: req.adminUser.email || req.adminUser.id, deletedByName: req.adminUser.name,
+      purgeAt: new Date(now.getTime() + require('../utils/trash').KEEP_DAYS * 86400000),
+    });
     res.json({ event: adminEventView(event) });
   } catch (err) {
     console.error('Delete attendance sheet error:', err);
