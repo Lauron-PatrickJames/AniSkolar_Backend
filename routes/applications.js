@@ -347,8 +347,10 @@ router.post('/', requireStudent, (req, res) => {
       const blocked = applyBlock(scholarship, setting);
       if (blocked) return res.status(400).json({ error: blocked });
 
-      // Open only to some programs (e.g. CS and IT): others can't apply.
-      const programs = setting?.rules?.programs;
+      // Open only to some programs (e.g. CS and IT, or the CBAASG's CBAA
+      // programs): others can't apply. The office's saved rules replace the
+      // scholarship's built-in list.
+      const programs = setting?.rules ? setting.rules.programs : scholarship.programs;
       if (Array.isArray(programs) && programs.length) {
         const applicant = await Student.findOne({ studentNumber }).select('programCode').lean();
         if (!applicant?.programCode || !programs.includes(applicant.programCode)) {

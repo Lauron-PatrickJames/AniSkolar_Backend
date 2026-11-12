@@ -16,6 +16,18 @@
 const SPORTS = ['Basketball', 'Volleyball', 'Athletics (track and field)', 'Badminton', 'Table tennis', 'Swimming', 'Chess'];
 const SCORE = { type: 'number', min: 1, max: 5, step: 0.01 };
 
+// CBAASG: the tax exemption certificate is optional, so it's asked for
+// only when the student says they have one.
+const CBAASG_BASE = [
+  'Recommendation letter from your Department Chair',
+  'Grades from the previous academic year',
+  'Certificate of Registration (COR) for the current semester',
+  'Certificate of Indigency or proof of inability to pay the tuition fee',
+  'Payslip or ITR supporting your parents’ or guardian’s annual gross income',
+];
+const CBAASG_DOCUMENTS = { by: 'taxExemption', yes: [...CBAASG_BASE, 'Certificate of Tax Exemption'], no: CBAASG_BASE };
+const CBAASG_INTERVIEWS = { initialInterview: { type: 'date' }, finalInterview: { type: 'date' } };
+
 const OFFICE_FORMS = {
   // Sports Development Office: no application. It adds each player picked
   // from the tryouts (POST /api/applications/direct-award); these are the
@@ -86,6 +98,64 @@ const OFFICE_FORMS = {
       publishedWorks: { type: 'number', min: 0, max: 500, step: 1 },
       officeHours: { type: 'number', min: 0, max: 100, step: 0.01 },
       merit: { type: 'choice', options: ['3', '2', '1', '0', 'demerit'] },
+    },
+  },  // CBAASG (Ordinance No. 01, s. 2021–2022): one Achie scholar per CBAA
+  // department, and its officers' 25%. Same documents and interviews.
+  s13: {
+    answers: {
+      department: { type: 'choice', options: ['ABD', 'ACD', 'BMD', 'MKD'] },
+      noOtherScholarship: { type: 'confirm' },
+      noMajorOffense: { type: 'confirm' },
+      taxExemption: { type: 'choice', options: ['yes', 'no'] },
+    },
+    documents: CBAASG_DOCUMENTS,
+    assessment: CBAASG_INTERVIEWS,
+  },
+  s14: {
+    answers: {
+      branch: { type: 'choice', options: ['executive', 'legislative'] },
+      position: { type: 'text', max: 100 },
+      activeInvolvement: { type: 'confirm' },
+      noMajorOffense: { type: 'confirm' },
+      taxExemption: { type: 'choice', options: ['yes', 'no'] },
+    },
+    documents: CBAASG_DOCUMENTS,
+    assessment: CBAASG_INTERVIEWS,
+  },
+  // CICSSG's Padayon Pioneers: confirmed by email, then an interview.
+  s15: {
+    answers: {
+      noMajorOffense: { type: 'confirm' },
+      noAllowanceScholarship: { type: 'confirm' },
+    },
+    assessment: {
+      interviewDate: { type: 'date' },
+      interviewTime: { type: 'time' },
+    },
+  },
+  // CEATSG: the Director of Academics evaluates; grants come from the
+  // semester's ₱200,000 fund.
+  s16: {
+    answers: {
+      noConcurrentScholarship: { type: 'confirm' },
+    },
+    assessment: {
+      interviewDate: { type: 'date' },
+      interviewTime: { type: 'time' },
+      grant: { type: 'number', min: 0, max: 200000, step: 1 },
+    },
+  },
+  // CCJESG: the grant is capped by position (₱10,000 / ₱7,000 / ₱6,000).
+  s17: {
+    answers: {
+      position: { type: 'choice', options: ['governor', 'viceGovernor', 'chiefOfStaff', 'executive', 'legislative'] },
+      noViolation: { type: 'confirm' },
+      activeOfficer: { type: 'confirm' },
+    },
+    assessment: {
+      interviewDate: { type: 'date' },
+      evaluationPassed: { type: 'bool' },
+      grant: { type: 'number', min: 0, max: 10000, step: 1 },
     },
   },
 };
