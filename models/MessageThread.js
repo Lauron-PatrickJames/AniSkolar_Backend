@@ -1,9 +1,10 @@
 const mongoose = require('mongoose');
 
-// The AdSO's own state for a conversation in their Messages inbox: pinned,
+// An office's own state for a conversation in its Messages inbox: pinned,
 // archived, marked unread, or deleted. Students and office heads never see
 // it (their copy and the "Seen" receipts stay as they are). One per
-// conversation: a student's (key = student number) or a duty office's
+// conversation: a student's (key = student number in the AdSO's inbox,
+// "POLCA|<student number>" in another office's) or a duty office's
 // (key = the office name as stored on Message.office). See routes/messages.js.
 
 const messageThreadSchema = new mongoose.Schema({

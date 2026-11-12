@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
-// Messages with the AdSO: one conversation per student (by studentNumber)
+// Messages with the scholarship offices: one conversation per student and
+// office (by studentNumber and inbox)
 // and one per duty office (by office; its head writes from the office
 // portal). Either side may attach JPG,
 // PNG or PDF files (stored like application documents, utils/gridfs.js)
@@ -18,6 +19,10 @@ const messageSchema = new mongoose.Schema({
   // Exactly one of studentNumber / office.
   studentNumber: { type: String, index: true },
   office: { type: String, trim: true, maxlength: 200, index: true },
+  // A student conversation's office (code, e.g. 'LSO' for the AdSO,
+  // 'POLCA'): each office has its own inbox. Unset on older messages,
+  // which are the AdSO's. See routes/messages.js.
+  inbox: { type: String, trim: true, maxlength: 40 },
   from: { type: String, enum: ['student', 'adso', 'office'], required: true },
   authorEmail: String,
   authorName: String,
@@ -29,6 +34,7 @@ const messageSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 messageSchema.index({ studentNumber: 1, createdAt: 1 });
+messageSchema.index({ inbox: 1, studentNumber: 1, createdAt: 1 });
 messageSchema.index({ from: 1, readAt: 1 });
 
 module.exports = mongoose.model('Message', messageSchema);
