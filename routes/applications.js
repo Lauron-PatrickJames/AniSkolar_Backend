@@ -66,6 +66,7 @@ function joinNameParts(partsExpr) {
 // Office-use data that applicants never see.
 const STUDENT_HIDDEN_FIELDS = '-adminFields -officeAssessment -internalNotes -sfagPercentageSetBy';
 const { OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment } = require('../data/officeForms');
+const { semesterEnd } = require('../utils/semester');
 
 // A standard-form submission's office answers (data/officeForms.js) and
 // the documents they call for, checked before any file is stored.
@@ -192,6 +193,8 @@ router.post('/direct-award', requireAdmin, (req, res) => {
     try {
       const scholarship = directAwardScholarship(req.adminUser, req.body.scholarshipId);
       if (!scholarship) return res.status(403).json({ error: 'Only the office that handles this scholarship can add its scholars.' });
+      // Who the office adds ('player', 'officer'), who approves, and the note.
+      const award = OFFICE_FORMS[scholarship.id]?.award ?? { who: 'scholar', approver: 'office head', note: 'Added by the office.' };
       const studentNumber = typeof req.body.studentNumber === 'string' ? req.body.studentNumber.trim() : '';
       if (!/^\d{9}$/.test(studentNumber)) return res.status(400).json({ error: 'Enter the 9-digit student number.' });
       let student = await Student.findOne({ studentNumber }).lean();
@@ -201,11 +204,11 @@ router.post('/direct-award', requireAdmin, (req, res) => {
         const firstName = text(req.body.firstName);
         const lastName = text(req.body.lastName);
         const email = text(req.body.email).toLowerCase();
-        if (!firstName || !lastName) return res.status(400).json({ error: 'Enter the player’s first and last name.' });
-        if (!/^[^\s@]+@dlsud\.edu\.ph$/.test(email)) return res.status(400).json({ error: 'Enter the player’s DLSU-D email (@dlsud.edu.ph).' });
+        if (!firstName || !lastName) return res.status(400).json({ error: `Enter the ${award.who}’s first and last name.` });
+        if (!/^[^\s@]+@dlsud\.edu\.ph$/.test(email)) return res.status(400).json({ error: `Enter the ${award.who}’s DLSU-D email (@dlsud.edu.ph).` });
         student = { studentNumber, firstName, lastName, middleName: '', name: `${firstName} ${lastName}`.toUpperCase(), email, pending: true };
       }
-      if (req.body.directorApproved !== 'true') return res.status(400).json({ error: 'Confirm the SDO Director approved it.' });
+      if (req.body.directorApproved !== 'true') return res.status(400).json({ error: `Confirm the ${award.approver} approved it.` });
 
       let rawAnswers; let rawAssessment;
       try {
@@ -213,15 +216,20 @@ router.post('/direct-award', requireAdmin, (req, res) => {
         rawAssessment = JSON.parse(req.body.assessment || '{}');
       } catch { return res.status(400).json({ error: 'Invalid form data.' }); }
       const answers = parseOfficeAnswers(scholarship.id, rawAnswers);
-      if (answers.error) return res.status(400).json({ error: 'Fill in the player’s details.' });
+      if (answers.error) return res.status(400).json({ error: `Fill in the ${award.who}’s details.` });
       const assessment = parseAssessment(scholarship.id, rawAssessment);
       if (assessment.error) return res.status(400).json({ error: assessment.error });
+      const now = new Date();
       const [docLabel] = officeDocuments(scholarship.id, answers.value) ?? [];
       const files = req.files || [];
       if (files.length !== 1) return res.status(400).json({ error: `Attach the ${docLabel ?? 'document'} (one JPG).` });
 
-      if (await Application.exists({ studentNumber, scholarshipId: scholarship.id, status: 'Approved', endedAt: null })) {
-        return res.status(409).json({ error: `${student.name || studentNumber} is already a scholar of the ${scholarship.name}.` });
+      // Already a current scholar. A one-semester grant (ROTC) only counts
+      // for its own semester: next semester the office adds them again.
+      const current = await Application.find({ studentNumber, scholarshipId: scholarship.id, status: 'Approved', endedAt: null }).select('reviewedAt createdAt').lean();
+      const stillCurrent = current.filter(a => !scholarship.oneSemester || now < semesterEnd(a.reviewedAt || a.createdAt));
+      if (stillCurrent.length) {
+        return res.status(409).json({ error: `${student.name || studentNumber} is already a scholar of the ${scholarship.name}${scholarship.oneSemester ? ' this semester' : ''}.` });
       }
       if (req.body.acknowledgeOtherScholarship !== 'true') {
         const others = await otherScholarshipsHeld(studentNumber, scholarship.id);
@@ -232,7 +240,6 @@ router.post('/direct-award', requireAdmin, (req, res) => {
       }
 
       const documents = await storeFilesInGridFS(files, [docLabel]);
-      const now = new Date();
       const by = req.adminUser.email;
       const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 2000) : '';
       const application = await Application.create({
@@ -259,7 +266,7 @@ router.post('/direct-award', requireAdmin, (req, res) => {
         forwardedAt: now,
         forwardedBy: by,
         history: [
-          { status: 'Approved', note: note || 'Picked from the varsity tryouts; approved by the SDO Director.', changedBy: by, changedByName: req.adminUser.name, changedByOffice: req.adminUser.office, changedAt: now },
+          { status: 'Approved', note: note || award.note, changedBy: by, changedByName: req.adminUser.name, changedByOffice: req.adminUser.office, changedAt: now },
           { status: 'Forwarded to LSO', changedBy: 'system', changedByOffice: scholarship.office, changedAt: now },
         ],
       });

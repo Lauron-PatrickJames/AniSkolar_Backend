@@ -157,6 +157,8 @@ describe('frontend and backend scholarship lists match', () => {
       byId[id] = {
         office: entry.match(/\n {4}office: '([A-Z]+)'/)?.[1] ?? 'LSO',
         status: entry.match(/\n {4}status: '([^']+)'/)?.[1],
+        noRenewal: /\n {4}noRenewal: true/.test(entry),
+        oneSemester: /\n {4}oneSemester: true/.test(entry),
       };
     }
     return byId;
@@ -168,6 +170,8 @@ describe('frontend and backend scholarship lists match', () => {
       assert.ok(fe[s.id], `${s.id} is missing from the frontend`);
       assert.equal(fe[s.id].office, s.office, `${s.id} office`);
       assert.equal(fe[s.id].status, s.defaultStatus ?? 'Open', `${s.id} default status`);
+      assert.equal(fe[s.id].noRenewal, !!s.noRenewal, `${s.id} noRenewal`);
+      assert.equal(fe[s.id].oneSemester, !!s.oneSemester, `${s.id} oneSemester`);
     }
     assert.deepEqual(Object.keys(fe).sort(), SCHOLARSHIPS.map(s => s.id).sort());
   });

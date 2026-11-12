@@ -8,6 +8,8 @@
 //               showIf: { key, value } asks it only after that answer.
 //   documents   the documents to upload, by an answer (replaces the
 //               scholarship's list), e.g. the SDO's coach's document.
+//   award       scholarships the office adds itself (directAward): who
+//               they add ('player'), who must approve, and the history note.
 //   assessment  what the office records while deciding (the points,
 //               rating, rank or schedule behind its decision), saved by
 //               PATCH /api/applications/:id/office-assessment.
@@ -39,6 +41,7 @@ const OFFICE_FORMS = {
       sport: { type: 'choice', options: SPORTS },
       coach: { type: 'text', max: 100 },
     },
+    award: { who: 'player', approver: 'SDO Director', note: 'Picked from the varsity tryouts; approved by the SDO Director.' },
     documents: {
       by: 'playerType',
       incoming: ['Coach\'s evaluation and recommendation'],
@@ -64,12 +67,16 @@ const OFFICE_FORMS = {
       boardScore: SCORE,
     },
   },
-  // 267th NROTCU: the amount follows the officer's rank.
+  // 267th NROTCU: no application. The ROTC Office adds each officer every
+  // semester (POST /api/applications/direct-award) with the Commandant's
+  // or ROTC Coordinator's recommendation; the amount follows the rank.
   s10: {
     answers: {
       rank: { type: 'choice', options: ['corps', 'vice', 'second', 'third', 'fourth'] },
       activeDuty: { type: 'confirm' },
     },
+    documents: Object.fromEntries([['by', 'rank'], ...['corps', 'vice', 'second', 'third', 'fourth'].map(r => [r, ['Recommendation from the Commandant and/or the ROTC Coordinator']])]),
+    award: { who: 'officer', approver: 'Commandant or ROTC Coordinator', note: 'Added by the ROTC Office at their current rank, recommended by the Commandant or ROTC Coordinator.' },
     assessment: {
       amount: { type: 'number', min: 0, max: 100000, step: 1 },
     },

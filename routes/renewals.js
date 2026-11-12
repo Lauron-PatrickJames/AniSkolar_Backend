@@ -284,6 +284,7 @@ function parsePeriodBody(body, { partial }) {
     const scholarship = findScholarship(body.scholarshipId);
     if (!scholarship) return { error: 'Choose a scholarship.' };
     if (!acceptsOnlineApplications(scholarship)) return { error: 'This scholarship is awarded outside AniSkolar, so it has no online renewal.' };
+    if (scholarship.oneSemester) return { error: `The ${scholarship.name} has no renewals: it's a one-semester grant, so scholars apply again in the next call.` };
     if (scholarship.noRenewal) return { error: `The ${scholarship.name} has no renewals: scholars keep it until they graduate.` };
     out.scholarshipId = scholarship.id;
   }
