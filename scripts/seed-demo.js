@@ -647,6 +647,28 @@ function history(steps, office = 'LSO') {
     msg(S[5], 'adso', '2026-11-07T09:30:00+08:00', 'Hi Paolo, the file you uploaded for the Certificate of Indigency is your COR. Please resubmit with the correct file.', { unread: true, more: { inbox: 'CCJESG', authorName: REVIEWERS.CCJESG.name, authorEmail: REVIEWERS.CCJESG.email } }),
   ]);
 
+  // Office-to-office (AdSO <-> POLCA), and a message its writer unsent.
+  const peerMsg = (from, at, body, extra = {}) => ({
+    peer: 'LSO|POLCA', fromOffice: from, from: 'adso', body, attachments: [],
+    authorName: from === 'LSO' ? ADMIN_NAME : REVIEWERS.POLCA.name, authorEmail: from === 'LSO' ? ADMIN : REVIEWERS.POLCA.email,
+    readAt: extra.unread ? null : d(at), createdAt: d(at), updatedAt: d(at),
+  });
+  await db.collection('messages').insertMany([
+    peerMsg('POLCA', '2026-11-09T10:00:00+08:00', 'Good morning! We approved two CEAT scholars this week. Could you check that their SFAG grants were closed?'),
+    peerMsg('LSO', '2026-11-09T14:20:00+08:00', 'Good afternoon! Yes, both chose POLCA, so their SFAG grants are ended. Thank you!'),
+    peerMsg('POLCA', '2026-11-12T09:15:00+08:00', 'Noted, thanks! We’ll forward the list on Friday.', { unread: true }),
+    { ...msg(S[2], 'student', '2026-11-12T16:05:00+08:00', '', { more: { unsentAt: d('2026-11-12T16:06:00+08:00') } }), readAt: d('2026-11-12T16:06:00+08:00') },
+  ]);
+
+  // The Trash: an announcement deleted 3 days ago (restorable for 27 more).
+  const TrashItem = require('../models/TrashItem');
+  const trashedAt = new Date(Date.now() - 3 * 86400000);
+  await TrashItem.create({
+    kind: 'announcement', title: 'Duty schedule for the semestral break (draft)', office: 'LSO',
+    data: { _id: new mongoose.Types.ObjectId(), title: 'Duty schedule for the semestral break (draft)', description: 'No duties from December 20 to January 4.', content: 'No duties from December 20 to January 4. Offices reopen January 5.', category: 'General', status: 'draft', createdBy: ADMIN_NAME, images: [], createdAt: trashedAt, updatedAt: trashedAt },
+    deletedAt: trashedAt, deletedBy: ADMIN, deletedByName: ADMIN_NAME, purgeAt: new Date(trashedAt.getTime() + 30 * 86400000),
+  });
+
   // The AdSO's inbox: Maria's chat pinned, Jasmine's archived.
   await MessageThread.insertMany([
     { kind: 'student', key: S[0].studentNumber, pinnedAt: d('2026-10-01T09:00:00+08:00') },
