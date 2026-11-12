@@ -137,7 +137,9 @@ const SCHOLARSHIPS = [
   // current rank (the rank sets the amount): no application, no renewals.
   { id: 's10', defaultStatus: 'Closed', name: '267th NROTC Scholarship', office: 'ROTC', formType: 'standard', referenceCode: 'ROTC', applicationMode: 'info', directAward: true, noRenewal: true, oneSemester: true },
   { id: 's11', defaultStatus: 'Closed', name: 'USG Student Financial Aid Grant', office: 'USG', formType: 'standard', referenceCode: 'USGF', noRenewal: true, oneSemester: true },
-  { id: 's12', defaultStatus: 'Closed', name: 'Heraldo Filipino Scholarship', office: 'HERALDO', formType: 'standard', referenceCode: 'HF' },
+  // No renewals: staff keep it while they're on the Editorial Staff; the
+  // office marks them Stopped when they leave (or Graduated).
+  { id: 's12', defaultStatus: 'Closed', name: 'Heraldo Filipino Scholarship', office: 'HERALDO', formType: 'standard', referenceCode: 'HF', noRenewal: true },
   // CBAASG Ordinance No. 01, s. 2021–2022: for CBAA students only (the
   // office can change the programs; its saved rules then apply instead).
   { id: 's13', defaultStatus: 'Closed', name: 'CBAASG Achie Scholarship', office: 'CBAASG', formType: 'standard', referenceCode: 'ACHIE', programs: CBAA_PROGRAMS },
