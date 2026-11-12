@@ -34,7 +34,8 @@ const { listOffices, norm } = require('../utils/offices');
 // are the AdSO's ('LSO').
 //
 // Student (?office= / body.office picks the office; default the AdSO):
-//   GET  /api/messages/mine/offices    the offices they can write to, with last message and unread
+//   GET  /api/messages/mine/offices    the offices they can write to (with last message and
+//                                      unread; `started` = has a conversation or their application)
 //   GET  /api/messages/mine            their conversation with that office (oldest first)
 //   GET  /api/messages/mine/unread     { unread } office messages not yet read (every office)
 //   POST /api/messages/mine/read       mark that office's messages read
@@ -43,6 +44,10 @@ const { listOffices, norm } = require('../utils/offices');
 //   GET  /api/messages/admin/threads   every conversation, latest first, with unread counts
 //   GET  /api/messages/admin/unread    { unread } messages from students not yet read
 //   GET  /api/messages/admin/students?q=   students to start a conversation with
+//   GET  /api/messages/admin/peers     the other scholarship offices (with admin accounts)
+//   GET  /api/messages/admin/peers/:code (+ POST, POST …/read, PATCH …/state, DELETE)
+//                                      a conversation with another scholarship office
+//                                      (Message.peer = the two codes, sorted, "LSO|POLCA")
 //   GET  /api/messages/admin/threads/:studentNumber        one conversation + the student
 //   POST /api/messages/admin/threads/:studentNumber        send (multipart, as above)
 //   POST /api/messages/admin/threads/:studentNumber/read   mark the student's messages read
@@ -120,6 +125,21 @@ async function officeAdminEmails(code) {
   return adminEmailCache.byOffice.get(code) ?? [];
 }
 
+// Office-to-office conversations: both offices' codes, sorted ("LSO|POLCA").
+const pairKey = (a, b) => [a, b].sort().join('|');
+// Matches the conversations an office is part of.
+const peerOf = code => ({ peer: { $regex: `(^|\\|)${code}(\\||$)` } });
+const officeShort = code => OFFICES.find(o => o.code === code)?.short ?? code;
+// A message as one office sees it: its own are 'adso' (mine), the other's 'office'.
+function peerView(m, me) {
+  const mine = m.fromOffice === me;
+  return {
+    ...view(m),
+    from: mine ? 'adso' : 'office',
+    authorName: mine ? (m.authorName || officeLabel(me)) : [m.authorName, officeShort(m.fromOffice)].filter(Boolean).join(' · '),
+  };
+}
+
 const appUrl = () => process.env.APP_URL || (process.env.FRONTEND_ORIGINS || '').split(',')[0].trim() || 'http://localhost:3000';
 
 function view(m) {
@@ -141,9 +161,9 @@ function view(m) {
 // Validates and stores a new message. Returns { message } or { status, error }.
 // The thread is a student's with an office ({ studentNumber, inbox }) or a
 // duty office's with the AdSO ({ office }).
-async function createMessage(req, { studentNumber, inbox = ADSO, office, from, authorEmail, authorName }) {
-  const thread = studentNumber ? { studentNumber, inbox } : { office };
-  const match = studentNumber ? { studentNumber, ...inboxOf(inbox) } : { office };
+async function createMessage(req, { studentNumber, inbox = ADSO, office, peer, fromOffice, from, authorEmail, authorName }) {
+  const thread = studentNumber ? { studentNumber, inbox } : peer ? { peer, fromOffice } : { office };
+  const match = studentNumber ? { studentNumber, ...inboxOf(inbox) } : peer ? { peer, fromOffice } : { office };
   const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
   const files = req.files || [];
   if (!body && !files.length) return { status: 400, error: 'Write a message or attach a file.' };
@@ -189,8 +209,10 @@ function preview(message) {
 
 // --- Student -------------------------------------------------------------------
 
-// The offices a student can write to: the AdSO, the offices of their
-// applications, and any office that has written to them.
+// The offices a student can write to: the AdSO and every partner office
+// with an admin account to answer. `started` marks the ones the student
+// already deals with (a conversation, or one of their applications); the
+// page lists those and offers the rest under "Message another office".
 router.get('/mine/offices', requireStudent, async (req, res) => {
   try {
     const [appOffices, groups] = await Promise.all([
@@ -206,10 +228,17 @@ router.get('/mine/offices', requireStudent, async (req, res) => {
       ]),
     ]);
     const byCode = new Map(groups.map(g => [g._id, g]));
-    const codes = new Set([ADSO, ...appOffices.map(o => o || ADSO), ...byCode.keys()]);
-    const offices = OFFICES.filter(o => codes.has(o.code)).map(o => {
+    const started = new Set([ADSO, ...appOffices.map(o => o || ADSO), ...byCode.keys()]);
+    // Offices with someone to reply (any office, if Clerk can't be asked).
+    let staffed = null;
+    try {
+      staffed = new Set((await Promise.all(OFFICES.map(async o => ((await officeAdminEmails(o.code)).length ? o.code : null)))).filter(Boolean));
+    } catch (err) {
+      console.error('Office admin lookup failed:', err);
+    }
+    const offices = OFFICES.filter(o => started.has(o.code) || !staffed || staffed.has(o.code)).map(o => {
       const g = byCode.get(o.code);
-      return { code: o.code, name: o.name, short: o.short, unread: g?.unread ?? 0, last: g ? view(g.last) : null };
+      return { code: o.code, name: o.name, short: o.short, started: started.has(o.code), unread: g?.unread ?? 0, last: g ? view(g.last) : null };
     }).sort((x, y) => (x.code === ADSO ? -1 : y.code === ADSO ? 1 : 0)
       || (new Date(y.last?.createdAt ?? 0) - new Date(x.last?.createdAt ?? 0)));
     res.json({ offices });
@@ -288,8 +317,12 @@ router.post('/mine', requireStudent, withUpload, async (req, res) => {
 // An office's inbox state for a conversation (models/MessageThread.js).
 // kind 'student' (key = student number, in the inbox of `inbox`) or
 // 'office' (a duty office's, the AdSO's only).
-const threadQuery = (kind, key, inbox = ADSO) => (kind === 'student' ? { studentNumber: key, ...inboxOf(inbox) } : { office: key });
-const stateKey = (kind, key, inbox = ADSO) => ({ kind, key: kind === 'student' ? studentKey(inbox, key) : key });
+// 'peer' (key = the other scholarship office's code, inbox = this office's).
+const threadQuery = (kind, key, inbox = ADSO) => (kind === 'student' ? { studentNumber: key, ...inboxOf(inbox) }
+  : kind === 'peer' ? { peer: pairKey(inbox, key) } : { office: key });
+const stateKey = (kind, key, inbox = ADSO) => ({ kind, key: kind === 'student' ? studentKey(inbox, key) : kind === 'peer' ? `${inbox}>${key}` : key });
+// The other side's messages in a conversation.
+const incoming = (kind, key, inbox = ADSO) => (kind === 'peer' ? { ...threadQuery(kind, key, inbox), fromOffice: key } : { ...threadQuery(kind, key, inbox), from: kind });
 const afterDeleted = st => (st?.clearedAt ? { createdAt: { $gt: st.clearedAt } } : {});
 const stateView = st => ({ pinned: !!st?.pinnedAt, archived: !!st?.archivedAt, markedUnread: !!st?.markedUnread });
 
@@ -297,7 +330,7 @@ const stateView = st => ({ pinned: !!st?.pinnedAt, archived: !!st?.archivedAt, m
 // "mark as unread" is cleared.
 async function markRead(kind, key, inbox = ADSO) {
   await Promise.all([
-    Message.updateMany({ ...threadQuery(kind, key, inbox), from: kind, readAt: null }, { $set: { readAt: new Date() } }),
+    Message.updateMany({ ...incoming(kind, key, inbox), readAt: null }, { $set: { readAt: new Date() } }),
     MessageThread.updateOne(stateKey(kind, key, inbox), { $set: { markedUnread: false } }),
   ]);
 }
@@ -323,12 +356,47 @@ async function setState(kind, key, body = {}, inbox = ADSO) {
 // attachments stay theirs). A new message starts it again.
 async function deleteForAdso(kind, key, inbox = ADSO) {
   const now = new Date();
-  await Message.updateMany({ ...threadQuery(kind, key, inbox), from: kind, readAt: null }, { $set: { readAt: now } });
+  await Message.updateMany({ ...incoming(kind, key, inbox), readAt: null }, { $set: { readAt: now } });
   await MessageThread.findOneAndUpdate(
     stateKey(kind, key, inbox),
     { $set: { clearedAt: now, pinnedAt: null, archivedAt: null, markedUnread: false } },
     { upsert: true }
   );
+}
+
+// An office's conversations with other scholarship offices, as thread rows.
+async function peerGroups(me) {
+  const prefix = `${me}>`;
+  const states = (await MessageThread.find({ kind: 'peer', key: { $regex: `^${me}>` } }).lean())
+    .map(t => ({ ...t, other: t.key.slice(prefix.length) }));
+  const deleted = states.filter(t => t.clearedAt).map(t => ({ peer: pairKey(me, t.other), createdAt: { $lte: t.clearedAt } }));
+  const groups = await Message.aggregate([
+    { $match: { ...peerOf(me), ...(deleted.length ? { $nor: deleted } : {}) } },
+    { $sort: { createdAt: -1 } },
+    { $group: {
+      _id: '$peer',
+      last: { $first: '$$ROOT' },
+      unread: { $sum: { $cond: [{ $and: [{ $ne: ['$fromOffice', me] }, { $eq: ['$readAt', null] }] }, 1, 0] } },
+      count: { $sum: 1 },
+      lastIncomingAt: { $max: { $cond: [{ $ne: ['$fromOffice', me] }, '$createdAt', null] } },
+    } },
+  ]);
+  return groups.map(g => {
+    const other = g._id.split('|').find(c => c !== me) ?? me;
+    const st = states.find(t => t.other === other);
+    return {
+      kind: 'peer',
+      peerOffice: other,
+      name: officeLabel(other),
+      email: '',
+      unread: g.unread,
+      count: g.count,
+      last: peerView(g.last, me),
+      pinned: !!st?.pinnedAt,
+      archived: !!st?.archivedAt && !(g.lastIncomingAt && g.lastIncomingAt > st.archivedAt),
+      markedUnread: !!st?.markedUnread,
+    };
+  });
 }
 
 router.get('/admin/threads', requireAdmin, async (req, res) => {
@@ -338,7 +406,7 @@ router.get('/admin/threads', requireAdmin, async (req, res) => {
     // This office's states, keyed by student number (or office name).
     const prefix = `${inbox}|`;
     const states = (await MessageThread.find(isAdso
-      ? { key: { $not: /\|/ } }
+      ? { kind: { $in: ['student', 'office'] }, key: { $not: /\|/ } }
       : { kind: 'student', key: { $regex: `^${inbox}\\|` } }).lean())
       .map(t => (isAdso ? t : { ...t, key: t.key.slice(prefix.length) }));
     const stateOf = (kind, key) => states.find(t => t.kind === kind && t.key === key);
@@ -371,10 +439,11 @@ router.get('/admin/threads', requireAdmin, async (req, res) => {
       };
     };
     // Duty offices write to the AdSO only.
-    const [threads, officeThreads, offices] = await Promise.all([
+    const [threads, officeThreads, offices, peerThreads] = await Promise.all([
       group('studentNumber', 'student'),
       isAdso ? group('office', 'office') : [],
       isAdso ? listOffices() : [],
+      peerGroups(inbox),
     ]);
     const headOf = new Map(offices.map(o => [norm(o.office), o]));
     const students = await Student.find({ studentNumber: { $in: threads.map(t => t._id) } })
@@ -407,7 +476,7 @@ router.get('/admin/threads', requireAdmin, async (req, res) => {
         count: t.count,
         last: view(t.last),
         ...inboxState('office', t),
-      }))).sort((a, b) => (b.pinned - a.pinned) || (new Date(b.last.createdAt) - new Date(a.last.createdAt))),
+      }))).concat(peerThreads).sort((a, b) => (b.pinned - a.pinned) || (new Date(b.last.createdAt) - new Date(a.last.createdAt))),
     });
   } catch (err) {
     console.error('Load message threads error:', err);
@@ -419,13 +488,15 @@ router.get('/admin/unread', requireAdmin, async (req, res) => {
   try {
     const inbox = req.adminUser.office;
     const isAdso = inbox === ADSO;
-    const [unread, marked] = await Promise.all([
+    const [unread, marked, peerUnread, peerMarked] = await Promise.all([
       Message.countDocuments(isAdso
         ? { readAt: null, $or: [{ from: 'student', ...inboxOf(ADSO) }, { from: 'office' }] }
         : { readAt: null, from: 'student', inbox }),
-      MessageThread.countDocuments({ markedUnread: true, key: isAdso ? { $not: /\|/ } : { $regex: `^${inbox}\\|` } }),
+      MessageThread.countDocuments({ markedUnread: true, ...(isAdso ? { kind: { $in: ['student', 'office'] }, key: { $not: /\|/ } } : { kind: 'student', key: { $regex: `^${inbox}\\|` } }) }),
+      Message.countDocuments({ ...peerOf(inbox), fromOffice: { $ne: inbox }, readAt: null }),
+      MessageThread.countDocuments({ kind: 'peer', markedUnread: true, key: { $regex: `^${inbox}>` } }),
     ]);
-    res.json({ unread: unread + marked });
+    res.json({ unread: unread + marked + peerUnread + peerMarked });
   } catch (err) {
     console.error('Unread messages (admin) error:', err);
     res.status(500).json({ error: 'Failed to load messages.' });
@@ -544,6 +615,115 @@ router.delete('/admin/threads/:studentNumber', requireAdmin, async (req, res) =>
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete thread error:', err);
+    res.status(500).json({ error: 'Failed to delete the conversation.' });
+  }
+});
+
+// --- Other scholarship offices ---------------------------------------------------
+
+// Another scholarship office to write to (by code), not this one; or null.
+const findPeer = (req, code) => {
+  const c = typeof code === 'string' ? code.trim().toUpperCase() : '';
+  return OFFICE_CODES.includes(c) && c !== req.adminUser.office ? c : null;
+};
+
+// The offices with someone to answer (admin accounts in Clerk); every
+// office if Clerk can't be asked.
+router.get('/admin/peers', requireAdmin, async (req, res) => {
+  try {
+    const me = req.adminUser.office;
+    let staffed = null;
+    try {
+      staffed = new Set((await Promise.all(OFFICES.map(async o => ((await officeAdminEmails(o.code)).length ? o.code : null)))).filter(Boolean));
+    } catch (err) {
+      console.error('Office admin lookup failed:', err);
+    }
+    res.json({ offices: OFFICES.filter(o => o.code !== me && (!staffed || staffed.has(o.code))).map(o => ({ code: o.code, name: o.name, short: o.short })) });
+  } catch (err) {
+    console.error('Load peer offices error:', err);
+    res.status(500).json({ error: 'Failed to load the offices.' });
+  }
+});
+
+router.get('/admin/peers/:code', requireAdmin, async (req, res) => {
+  try {
+    const me = req.adminUser.office;
+    const other = findPeer(req, req.params.code);
+    if (!other) return res.status(404).json({ error: 'Office not found.' });
+    const st = await MessageThread.findOne(stateKey('peer', other, me)).lean();
+    const messages = await Message.find({ peer: pairKey(me, other), ...afterDeleted(st) }).sort({ createdAt: 1 }).limit(1000).lean();
+    res.json({ office: { code: other, name: officeLabel(other), short: officeShort(other) }, messages: messages.map(m => peerView(m, me)), state: stateView(st) });
+  } catch (err) {
+    console.error('Load peer thread error:', err);
+    res.status(500).json({ error: 'Failed to load the conversation.' });
+  }
+});
+
+router.post('/admin/peers/:code', requireAdmin, withUpload, async (req, res) => {
+  try {
+    const me = req.adminUser.office;
+    const other = findPeer(req, req.params.code);
+    if (!other) return res.status(404).json({ error: 'Office not found.' });
+    const result = await createMessage(req, {
+      peer: pairKey(me, other), fromOffice: me, from: 'adso', authorEmail: req.adminUser.email, authorName: req.adminUser.name,
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    if (!result.alreadyWaiting) {
+      const email = renderEmail({
+        heading: `New message from the ${officeLabel(me)}`,
+        intro: `${req.adminUser.name || req.adminUser.email} (${officeLabel(me)}) sent your office a message on AniSkolar:`,
+        body: preview(result.message),
+        button: { url: appUrl(), label: 'Reply in AniSkolar' },
+      });
+      const subject = `AniSkolar: new message from the ${officeLabel(me)}`;
+      if (other === ADSO) {
+        if (process.env.ADSO_NOTIFY_EMAIL) alertByEmail(result.message, { to: process.env.ADSO_NOTIFY_EMAIL, subject, email });
+      } else {
+        officeAdminEmails(other)
+          .then(to => to.length && alertByEmail(result.message, { to, subject, email }))
+          .catch(err => console.error('Office admin emails lookup failed:', err));
+      }
+    }
+    res.status(201).json({ message: peerView(result.message, me) });
+  } catch (err) {
+    console.error('Send peer message error:', err);
+    res.status(500).json({ error: 'Failed to send the message.' });
+  }
+});
+
+router.post('/admin/peers/:code/read', requireAdmin, async (req, res) => {
+  try {
+    const other = findPeer(req, req.params.code);
+    if (!other) return res.status(404).json({ error: 'Office not found.' });
+    await markRead('peer', other, req.adminUser.office);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Mark peer thread read error:', err);
+    res.status(500).json({ error: 'Failed to update the conversation.' });
+  }
+});
+
+router.patch('/admin/peers/:code/state', requireAdmin, async (req, res) => {
+  try {
+    const other = findPeer(req, req.params.code);
+    if (!other) return res.status(404).json({ error: 'Office not found.' });
+    const result = await setState('peer', other, req.body, req.adminUser.office);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json({ state: result.state });
+  } catch (err) {
+    console.error('Update peer thread state error:', err);
+    res.status(500).json({ error: 'Failed to update the conversation.' });
+  }
+});
+
+router.delete('/admin/peers/:code', requireAdmin, async (req, res) => {
+  try {
+    const other = findPeer(req, req.params.code);
+    if (!other) return res.status(404).json({ error: 'Office not found.' });
+    await deleteForAdso('peer', other, req.adminUser.office);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete peer thread error:', err);
     res.status(500).json({ error: 'Failed to delete the conversation.' });
   }
 });
@@ -708,7 +888,16 @@ router.get('/files/:fileId', requireStudentOrAdmin, async (req, res) => {
     const filter = { 'attachments.fileId': fileId };
     if (req.studentNumber) filter.studentNumber = req.studentNumber;
     else if (!req.adminUser?.office) return res.status(404).json({ error: 'File not found.' });
-    else Object.assign(filter, inboxOf(req.adminUser.office));
+    else {
+      // Its student conversations, (AdSO) the duty offices', or its
+      // conversations with other scholarship offices.
+      const o = req.adminUser.office;
+      filter.$or = [
+        { studentNumber: { $exists: true, $ne: null }, ...inboxOf(o) },
+        ...(o === ADSO ? [{ office: { $exists: true, $ne: null } }] : []),
+        peerOf(o),
+      ];
+    }
     const message = await Message.findOne(filter).select('attachments').lean();
     if (!message) return res.status(404).json({ error: 'File not found.' });
     const meta = message.attachments.find(a => String(a.fileId) === String(fileId));
