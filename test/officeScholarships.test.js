@@ -15,10 +15,11 @@ exclusivity.findHeldScholarships = async studentNumber => (holders.includes(stud
 let currentId;
 const Application = require('../models/Application');
 const Student = require('../models/Student');
+const ScholarshipSetting = require('../models/ScholarshipSetting');
 const { slotsFull } = require('../utils/collegeSlots');
 
 const { SCHOLARSHIPS, findScholarship } = require('../data/scholarships');
-const { OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment } = require('../data/officeForms');
+const { OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment, officeNumbers, parseOfficeNumbers } = require('../data/officeForms');
 
 // A complete, valid set of answers for each office form step.
 const VALID = {
@@ -111,7 +112,9 @@ describe('office assessments', () => {
 });
 
 describe('slot limits', () => {
+  let saved = null;                                             // the office's saved limits
   const run = async (id, count) => {
+    ScholarshipSetting.findOne = () => query(saved);
     currentId = id;
     holders = Array.from({ length: count }, (_, i) => `20230000${i}`);
     Application.distinct = () => query(holders);
@@ -133,6 +136,17 @@ describe('slot limits', () => {
 
   test('the CBAASG and CEATSG scholarships have no slot limit', async () => {
     for (const id of ['s13', 's14', 's16']) assert.equal(await run(id, 50), null);
+  });
+
+  test("the office's saved limit replaces the code's", async () => {
+    saved = { totalSlots: 3 };
+    assert.equal(await run('s15', 2), null);                    // Padayon raised from 2 to 3
+    assert.equal((await run('s15', 3)).slots, 3);
+    saved = { totalSlots: 5 };
+    assert.equal((await run('s16', 5)).slots, 5);               // CEAT given a limit
+    saved = { totalSlots: 0 };
+    assert.equal(await run('s17', 40), null);                   // CCJESG's limit removed
+    saved = null;
   });
 });
 
@@ -180,5 +194,29 @@ describe('frontend and backend scholarship lists match', () => {
     const text = fs.readFileSync(frontendForms, 'utf8');
     const ids = [...text.matchAll(/\n {2}(s\d+): \{/g)].map(m => m[1]).sort();
     assert.deepEqual(ids, Object.keys(OFFICE_FORMS).sort());
+  });
+});
+
+describe('office amounts', () => {
+  test("the defaults, and the office's changes", () => {
+    assert.equal(officeNumbers('s10').vice, 20000);
+    assert.equal(officeNumbers('s10', { vice: 18000 }).vice, 18000);
+    assert.equal(officeNumbers('s16').fund, 200000);
+  });
+
+  test('only changes from the defaults are kept, within range', () => {
+    assert.deepEqual(parseOfficeNumbers('s10', { corps: 30000, vice: 25000 }).value, { vice: 25000 });
+    assert.ok(parseOfficeNumbers('s10', { vice: -1 }).error);
+    assert.ok(parseOfficeNumbers('s10', { colonel: 5 }).error);
+    assert.deepEqual(parseOfficeNumbers('s8', { rating100: 4.8 }).value, { rating100: 4.8 });
+    assert.ok(parseOfficeNumbers('s8', { rating100: 6 }).error);
+    assert.ok(parseOfficeNumbers('s13', { x: 1 }).error);       // no amounts to set
+  });
+
+  test("grant limits follow the office's amounts", () => {
+    assert.ok(parseAssessment('s16', { grant: 250000 }).error);
+    assert.equal(parseAssessment('s16', { grant: 250000 }, { fund: 300000 }).value.grant, 250000);
+    assert.ok(parseAssessment('s17', { grant: 12000 }).error);
+    assert.equal(parseAssessment('s17', { grant: 12000 }, { governor: 12000 }).value.grant, 12000);
   });
 });

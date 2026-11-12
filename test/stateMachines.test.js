@@ -146,6 +146,10 @@ describe('applyBlock', () => {
     assert.equal(applyBlock({ id: 's1' }, null, june15), null);
     assert.match(applyBlock({ id: 's1' }, null, sept15), /June and July/);
   });
+  test('the SFAG\'s own dates replace June and July', () => {
+    assert.equal(applyBlock({ id: 's1' }, { opensOn: '2026-09-01', closesOn: '2026-09-30' }, sept15), null);
+    assert.match(applyBlock({ id: 's1' }, { opensOn: '2026-10-01', closesOn: '2026-10-31' }, sept15), /open on October 1, 2026/);
+  });
   test('open', () => {
     assert.equal(applyBlock({ id: 's2', opensOn: '2026-06-01', closesOn: '2026-06-30' }, null, june15), null);
   });

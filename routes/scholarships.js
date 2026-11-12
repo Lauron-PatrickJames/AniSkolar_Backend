@@ -12,6 +12,7 @@ const { inSfagApplicationWindow, sfagOpenAllYear } = require('../utils/academicY
 // The SFAG takes new applications in June and July only (renewals the rest
 // of the year), so it can only be open then.
 const SFAG_ID = 's1';
+const { parseOfficeNumbers } = require('../data/officeForms');
 
 // Scholarship management. The built-in scholarships are defined in code
 // (data/scholarships.js); the AdSO can override their content — status
@@ -71,7 +72,7 @@ router.get('/', async (req, res) => {
       return [s.id, { message: applyBlock(s, setting, now), ...periodOf(s, setting) }];
     }));
     // sfagOpenAllYear: the June–July SFAG limit is lifted (SFAG_OPEN_ALL_YEAR).
-    res.json({ scholarships: settings.map(s => s.toOverrides()), applyBlocks, sfagOpenAllYear: sfagOpenAllYear() });
+    res.json({ scholarships: settings.map(s => s.toOverrides()), applyBlocks, sfagOpenAllYear: sfagOpenAllYear(), passingAverage: await require('../models/DutySetting').passingAverage() });
   } catch (err) {
     console.error('Load scholarship settings error:', err);
     res.status(500).json({ error: 'Failed to load scholarships.' });
@@ -136,10 +137,6 @@ router.patch('/:id', requireAdmin, async (req, res) => {
     const unset = {};
 
     if (body.status !== undefined) {
-      // Its default status is Open, so clearing it counts as opening too.
-      if (scholarship.id === SFAG_ID && body.status !== 'Closed' && !inSfagApplicationWindow()) {
-        return res.status(409).json({ error: 'The SFAG can only be open in June and July, before the 1st semester enrollment. The rest of the year is for renewals (Review → Renewals).' });
-      }
       if (body.status === null || body.status === '') unset.status = '';
       else if (!STATUSES.includes(body.status)) return res.status(400).json({ error: `Status must be one of: ${STATUSES.join(', ')}.` });
       else set.status = body.status;
@@ -153,9 +150,36 @@ router.patch('/:id', requireAdmin, async (req, res) => {
       set[field] = body[field].trim();
     }
 
+    // Slot limits (null = the code's; 0 = no limit).
+    for (const field of ['totalSlots', 'slotsPerCollege']) {
+      if (body[field] === undefined) continue;
+      if (body[field] === null || body[field] === '') { unset[field] = ''; continue; }
+      const n = Number(body[field]);
+      if (!Number.isInteger(n) || n < 0 || n > 1000) return res.status(400).json({ error: 'Slots must be a whole number from 0 (no limit) to 1000.' });
+      set[field] = n;
+    }
+    // The office's amounts and levels (null = the code's).
+    if (body.officeNumbers !== undefined) {
+      if (body.officeNumbers === null) unset.officeNumbers = '';
+      else {
+        const parsed = parseOfficeNumbers(scholarship.id, body.officeNumbers);
+        if (parsed.error) return res.status(400).json({ error: parsed.error });
+        if (Object.keys(parsed.value).length) set.officeNumbers = parsed.value; else unset.officeNumbers = '';
+      }
+    }
+
     const current = await ScholarshipSetting.findOne({ scholarshipId: scholarship.id }).select('opensOn closesOn').lean();
     const dateError = parseDates(body, set, unset, periodOf(scholarship, current));
     if (dateError) return res.status(400).json({ error: dateError });
+
+    // The SFAG is open in June and July by default. Outside them it can be
+    // opened once it has application dates (saved or in this change),
+    // which then decide when students can apply (utils/scholarshipDates.js).
+    // Its default status is Open, so clearing the status counts as opening.
+    if (scholarship.id === SFAG_ID && body.status !== undefined && body.status !== 'Closed' && !inSfagApplicationWindow()) {
+      const dated = ['opensOn', 'closesOn'].some(f => !(f in unset) && (set[f] ?? current?.[f]));
+      if (!dated) return res.status(409).json({ error: 'Outside June and July, set the SFAG’s application dates first: they decide when students can apply.' });
+    }
 
     for (const field of LIST_FIELDS) {
       if (body[field] === undefined) continue;
@@ -322,9 +346,13 @@ router.delete('/:id', requireAdmin, async (req, res) => {
     if (await Application.exists({ scholarshipId: scholarship.id })) {
       return res.status(409).json({ error: 'It has applications, so it can\'t be deleted. Close it instead.' });
     }
-    await ScholarshipSetting.deleteOne({ scholarshipId: scholarship.id, custom: true });
+    // To the Trash for 30 days.
+    const setting = await ScholarshipSetting.findOne({ scholarshipId: scholarship.id, custom: true });
+    if (setting) {
+      await require('../utils/trash').moveToTrash({ kind: 'scholarship', doc: setting, title: scholarship.name, office: scholarship.office || 'LSO', by: req.adminUser });
+    }
     await customScholarships.load();
-    res.json({ deleted: scholarship.id });
+    res.json({ deleted: scholarship.id, trashed: true });
   } catch (err) {
     console.error('Delete scholarship error:', err);
     res.status(500).json({ error: 'Failed to delete the scholarship.' });

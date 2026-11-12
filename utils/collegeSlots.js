@@ -23,10 +23,21 @@ async function currentHolders(scholarshipId, { excludeStudent } = {}) {
   return holders;
 }
 
+// The scholarship with the office's saved slot limits (Scholarships page)
+// in place of the code's; 0 = no limit.
+async function withSavedSlots(scholarship) {
+  if (!scholarship) return scholarship;
+  const ScholarshipSetting = require('../models/ScholarshipSetting');
+  const saved = await ScholarshipSetting.findOne({ scholarshipId: scholarship.id }).select('totalSlots slotsPerCollege').lean();
+  if (!saved || (saved.totalSlots === undefined && saved.slotsPerCollege === undefined)) return scholarship;
+  return { ...scholarship, totalSlots: saved.totalSlots ?? 0, slotsPerCollege: saved.slotsPerCollege ?? 0 };
+}
+
 // Null when there's a free slot for this student (or the scholarship has no
 // slots); otherwise { slots, holders: [{ studentNumber, name }], message }
 // (plus college / collegeName for per-college slots).
-async function slotsFull(scholarship, studentNumber) {
+async function slotsFull(base, studentNumber) {
+  const scholarship = await withSavedSlots(base);
   if (scholarship?.totalSlots) {
     const holders = await currentHolders(scholarship.id, { excludeStudent: studentNumber });
     if (holders.length < scholarship.totalSlots) return null;
@@ -63,4 +74,4 @@ async function collegeSlotsFull(scholarship, studentNumber) {
   };
 }
 
-module.exports = { currentHolders, slotsFull };
+module.exports = { currentHolders, slotsFull, withSavedSlots };
