@@ -338,7 +338,9 @@ router.get('/me/holdings', requireStudent, async (req, res) => {
     const held = await findHeldScholarships(req.studentNumber);
     const exclusive = held.find(s => s.scholarshipId === EXCLUSIVE_SCHOLARSHIP_ID) ?? null;
     const slotsFull = [];
-    for (const scholarship of allScholarships().filter(s => s.slotsPerCollege || s.totalSlots)) {
+    // Slot limits come from the code or the office's saved ones
+    // (utils/collegeSlots.js), so every scholarship is checked.
+    for (const scholarship of allScholarships()) {
       if (held.some(h => h.scholarshipId === scholarship.id)) continue;
       const full = await scholarSlotsFull(scholarship, req.studentNumber);
       if (full) slotsFull.push({ scholarshipId: scholarship.id, message: full.message });

@@ -21,6 +21,7 @@ const dutyHoursRoutes = require('./routes/dutyHours');
 const messageRoutes = require('./routes/messages');
 const officeRoutes = require('./routes/office');
 const automationRoutes = require('./routes/automation');
+const trashRoutes = require('./routes/trash');
 const replyTemplateRoutes = require('./routes/replyTemplates');
 const documentZipRoutes = require('./routes/documentZips');
 
@@ -82,6 +83,7 @@ app.use('/api/duty-hours', dutyHoursRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/office', officeRoutes);
 app.use('/api/automation', automationRoutes);
+app.use('/api/trash', trashRoutes);
 app.use('/api/reply-templates', replyTemplateRoutes);
 app.use('/api/documents', documentZipRoutes);
 // Same router under /api/admin, e.g. POST /api/admin/announcements/:id/facebook/retry.
@@ -128,6 +130,11 @@ mongoose.connect(process.env.MONGODB_URI, process.env.MONGODB_DB ? { dbName: pro
     setTimeout(expireDuties, 60_000);
     setInterval(expireDuties, 15 * 60_000);
     setInterval(() => processOutbox().catch(err => console.error('Sending queued emails failed:', err)), 60_000);
+    // Trash: items older than 30 days are deleted for good, every hour.
+    const { purgeExpired } = require('./utils/trash');
+    const emptyTrash = () => purgeExpired().catch(err => console.error('Emptying the Trash failed:', err));
+    setTimeout(emptyTrash, 2 * 60_000);
+    setInterval(emptyTrash, 60 * 60_000);
   })
   .catch(err => {
     console.error('❌ MongoDB connection error:', err.message);

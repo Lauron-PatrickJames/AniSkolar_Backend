@@ -56,8 +56,12 @@ const dutySettingSchema = new mongoose.Schema({
   hoursSaved: Boolean,
   officeSlots: { type: [officeSlotSchema], default: undefined },
   deadlines: { type: [termDeadlineSchema], default: undefined },
+  // The duty evaluation average a renewal needs (1–5); unset = 4.
+  passingAverage: { type: Number, min: 1, max: 5 },
   updatedBy: String,
 }, { timestamps: true });
+
+const DEFAULT_PASSING_AVERAGE = 4;
 
 // The saved settings, or the defaults when none have been saved, as
 // { hoursByGroup: { lower: { 100: n|null, 75: …, 50: …, 25: … }, upper: { … } },
@@ -69,7 +73,13 @@ dutySettingSchema.statics.current = async function current() {
     g,
     Object.fromEntries(GRANT_PERCENTAGES.map(p => [p, saved[g]?.[key(p)] ?? null])),
   ]));
-  return { hoursByGroup, officeSlots: doc?.officeSlots ?? [], deadlines: doc?.deadlines ?? [], updatedBy: doc?.updatedBy ?? null, updatedAt: doc?.updatedAt ?? null };
+  return { hoursByGroup, officeSlots: doc?.officeSlots ?? [], deadlines: doc?.deadlines ?? [], passingAverage: doc?.passingAverage ?? DEFAULT_PASSING_AVERAGE, updatedBy: doc?.updatedBy ?? null, updatedAt: doc?.updatedAt ?? null };
+};
+
+// The evaluation average renewals need (the AdSO's, or 4).
+dutySettingSchema.statics.passingAverage = async function passingAverage() {
+  const doc = await this.findById('duty').select('passingAverage').lean();
+  return doc?.passingAverage ?? DEFAULT_PASSING_AVERAGE;
 };
 
 // The AdSO's duty deadline for a term (YYYY-MM-DD), or null.

@@ -217,7 +217,8 @@ router.post('/direct-award', requireAdmin, (req, res) => {
       } catch { return res.status(400).json({ error: 'Invalid form data.' }); }
       const answers = parseOfficeAnswers(scholarship.id, rawAnswers);
       if (answers.error) return res.status(400).json({ error: `Fill in the ${award.who}’s details.` });
-      const assessment = parseAssessment(scholarship.id, rawAssessment);
+      const numbersSaved = (await ScholarshipSetting.findOne({ scholarshipId: scholarship.id }).select('officeNumbers').lean())?.officeNumbers;
+      const assessment = parseAssessment(scholarship.id, rawAssessment, numbersSaved);
       if (assessment.error) return res.status(400).json({ error: assessment.error });
       const now = new Date();
       const [docLabel] = officeDocuments(scholarship.id, answers.value) ?? [];
@@ -1291,7 +1292,8 @@ router.patch('/:id/office-assessment', requireAdmin, async (req, res) => {
     if (!application) return res.status(404).json({ error: 'Application not found.' });
     const locked = partnerLock(req.adminUser, application);
     if (locked) return res.status(403).json({ error: locked });
-    const parsed = parseAssessment(application.scholarshipId, req.body?.assessment);
+    const numbersSaved = (await ScholarshipSetting.findOne({ scholarshipId: application.scholarshipId }).select('officeNumbers').lean())?.officeNumbers;
+    const parsed = parseAssessment(application.scholarshipId, req.body?.assessment, numbersSaved);
     if (parsed.error) return res.status(400).json({ error: parsed.error });
     application.officeAssessment = { ...parsed.value, updatedBy: req.adminUser.email || req.adminUser.id, updatedAt: new Date() };
     application.markModified('officeAssessment');

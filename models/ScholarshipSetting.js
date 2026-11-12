@@ -46,6 +46,13 @@ const scholarshipSettingSchema = new mongoose.Schema({
   customEligibility: listField,
   documentKeys: listField,
   customDocuments: listField,
+  // Slot limits, replacing the code's (0 = no limit): at most this many
+  // current scholars in all / per college (utils/collegeSlots.js).
+  totalSlots: { type: Number, min: 0, max: 1000 },
+  slotsPerCollege: { type: Number, min: 0, max: 1000 },
+  // The office's amounts and levels (data/officeForms.js → numbers), e.g.
+  // the ROTC amount for each rank: { key: number }.
+  officeNumbers: { type: mongoose.Schema.Types.Mixed, default: undefined },
 
   // Scholarships created by the AdSO.
   custom: { type: Boolean, default: undefined },
@@ -66,6 +73,7 @@ const EDITABLE_FIELDS = [
   'status', 'deadline', 'opensOn', 'closesOn', 'description', 'benefits', 'process', 'submissionNote',
   'schedule', 'scheduleOn', 'scheduleTime', 'scheduleVenue',
   'rules', 'customEligibility', 'documentKeys', 'customDocuments',
+  'totalSlots', 'slotsPerCollege', 'officeNumbers',
 ];
 // Fixed details of an AdSO-created scholarship (sent with its overrides).
 const CUSTOM_FIELDS = ['custom', 'name', 'office', 'category', 'applicationMode', 'availNote', 'handledBy', 'referenceCode'];

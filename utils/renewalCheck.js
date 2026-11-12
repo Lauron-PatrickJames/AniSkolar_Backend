@@ -18,7 +18,7 @@ const fmt = n => (Math.round(n * 100) / 100).toFixed(2).replace(/\.00$/, '');
 
 // duty: undefined = the scholarship has no duty hours; null = no log for
 // the term; else { summary } from the duty hours view.
-function checkRenewal({ renewal, period, duty }) {
+function checkRenewal({ renewal, period, duty, passing = PASSING_AVERAGE }) {
   if (!renewal?.continuing) return null;
   const items = [];
 
@@ -51,7 +51,7 @@ function checkRenewal({ renewal, period, duty }) {
   if (period.requiresEvaluation) {
     const avg = renewal.evaluation?.average;
     if (!avg) items.push({ key: 'evaluation', label: 'Evaluation', status: 'waiting', detail: 'Not evaluated yet' });
-    else if (avg < PASSING_AVERAGE) items.push({ key: 'evaluation', label: 'Evaluation', status: 'review', detail: `Average ${avg.toFixed(2)}, below ${PASSING_AVERAGE}: interview before deciding` });
+    else if (avg < passing) items.push({ key: 'evaluation', label: 'Evaluation', status: 'review', detail: `Average ${avg.toFixed(2)}, below ${passing}: interview before deciding` });
     else items.push({ key: 'evaluation', label: 'Evaluation', status: 'pass', detail: `Average ${avg.toFixed(2)}` });
   }
 
@@ -77,9 +77,10 @@ async function checksForPeriod(period, renewals) {
     const today = todayInManila();
     for (const log of logs) duties.set(log.studentNumber, dutyHelpers.logView(log, today, rules.get(log.studentNumber), eventsById, headOffices));
   }
+  const passing = await require('../models/DutySetting').passingAverage();
   return new Map(renewals.map(r => [
     String(r._id),
-    checkRenewal({ renewal: r, period, duty: hasDuty ? (duties.get(r.studentNumber) ?? null) : undefined }),
+    checkRenewal({ renewal: r, period, duty: hasDuty ? (duties.get(r.studentNumber) ?? null) : undefined, passing }),
   ]));
 }
 

@@ -52,8 +52,14 @@ function entryView(e) {
   return { _id: String(e._id), date: e.date, timeIn: e.timeIn, timeOut: e.timeOut, hours: entryHours(e), status: e.status ?? null, note: e.note ?? null, reviewedAt: e.reviewedAt ?? null, loggedAt: e.loggedAt ?? null };
 }
 
-router.get('/me', requireOfficeHead, (req, res) => {
-  res.json({ ...req.officeHead, current: currentTerm(), evaluationItems: EVALUATION_ITEMS, passingAverage: PASSING_AVERAGE });
+router.get('/me', requireOfficeHead, async (req, res) => {
+  try {
+    const passingAverage = await require('../models/DutySetting').passingAverage();
+    res.json({ ...req.officeHead, current: currentTerm(), evaluationItems: EVALUATION_ITEMS, passingAverage });
+  } catch (err) {
+    console.error('Load office head error:', err);
+    res.status(500).json({ error: 'Failed to load your office.' });
+  }
 });
 
 router.get('/scholars', requireOfficeHead, async (req, res) => {
@@ -304,8 +310,12 @@ router.delete('/announcements/:id', requireOfficeHead, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(404).json({ error: 'Announcement not found.' });
     const doc = await Announcement.findById(req.params.id);
     if (!doc || norm(doc.dutyOffice) !== norm(req.officeHead.office)) return res.status(404).json({ error: 'Announcement not found.' });
-    await doc.deleteOne();
-    res.json({ deleted: true });
+    // To the AdSO's Trash, restorable for 30 days.
+    await require('../utils/trash').moveToTrash({
+      kind: 'announcement', doc, title: `${doc.title} (${req.officeHead.office})`, office: 'LSO',
+      files: (doc.images || []).map(img => img.fileId), by: { email: req.officeHead.email, name: req.officeHead.name },
+    });
+    res.json({ deleted: true, trashed: true });
   } catch (err) {
     console.error('Delete office announcement error:', err);
     res.status(500).json({ error: 'Failed to delete the announcement.' });

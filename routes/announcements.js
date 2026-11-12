@@ -758,9 +758,9 @@ router.post('/:id/email/retry', requireAdmin, async (req, res) => {
 });
 
 // DELETE /api/announcements/:id
-// Deletes the announcement, its images, and its Facebook post. If Facebook
-// can't delete the post, the announcement is still deleted and the
-// response carries facebookWarning so the admin can remove it by hand.
+// Moves the announcement to the Trash (utils/trash.js) for 30 days. Its
+// images and Facebook post stay until it's deleted for good, so a restore
+// brings everything back.
 router.delete('/:id', requireAdmin, async (req, res) => {
   try {
     const objectId = toObjectId(req.params.id);
@@ -768,19 +768,11 @@ router.delete('/:id', requireAdmin, async (req, res) => {
     const doc = await Announcement.findById(objectId);
     if (!doc || !owns(req, doc)) return res.status(404).json({ error: 'Announcement not found.' });
 
-    let facebookWarning = null;
-    if (doc.fbPostId) {
-      try {
-        await facebook.deletePost(doc.fbPostId);
-      } catch (err) {
-        const { error } = facebookFailure(err);
-        facebookWarning = `The announcement was deleted, but its Facebook post couldn't be removed: ${error} Remove it on the Page (${doc.fbPermalink}).`;
-      }
-    }
-
-    await doc.deleteOne();
-    for (const img of doc.images) await deleteImage(img.fileId);
-    res.json({ success: true, facebookWarning });
+    await require('../utils/trash').moveToTrash({
+      kind: 'announcement', doc, title: doc.title, office: doc.office || 'LSO',
+      files: (doc.images || []).map(img => img.fileId), by: req.adminUser,
+    });
+    res.json({ success: true, trashed: true, facebookWarning: null });
   } catch (err) {
     console.error('Delete announcement error:', err);
     res.status(500).json({ error: 'Failed to delete announcement.' });

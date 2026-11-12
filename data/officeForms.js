@@ -30,6 +30,10 @@ const CBAASG_BASE = [
 const CBAASG_DOCUMENTS = { by: 'taxExemption', yes: [...CBAASG_BASE, 'Certificate of Tax Exemption'], no: CBAASG_BASE };
 const CBAASG_INTERVIEWS = { initialInterview: { type: 'date' }, finalInterview: { type: 'date' } };
 
+// Office numbers: a default and its allowed range.
+const PESO = (def, max = 500000) => ({ default: def, min: 0, max, step: 1 });
+const RATING = def => ({ default: def, min: 1, max: 5, step: 0.01 });
+
 const OFFICE_FORMS = {
   // Sports Development Office: no application. It adds each player picked
   // from the tryouts (POST /api/applications/direct-award); these are the
@@ -56,6 +60,8 @@ const OFFICE_FORMS = {
   // Vicissitude: Editorial Board discounts follow the performance rating
   // (60% Coordinator and Layout Artist, 40% Editorial Board).
   s8: {
+    // The lowest rating for each discount (the rest get 25%).
+    numbers: { rating100: RATING(4.75), rating75: RATING(4.5), rating50: RATING(4.25) },
     answers: {
       member: { type: 'choice', options: ['board', 'staff'] },
       position: { type: 'text', max: 100 },
@@ -77,6 +83,8 @@ const OFFICE_FORMS = {
     },
     documents: Object.fromEntries([['by', 'rank'], ...['corps', 'vice', 'second', 'third', 'fourth'].map(r => [r, ['Recommendation from the Commandant and/or the ROTC Coordinator']])]),
     award: { who: 'officer', approver: 'Commandant or ROTC Coordinator', note: 'Added by the ROTC Office at their current rank, recommended by the Commandant or ROTC Coordinator.' },
+    // The amount for each rank (₱), editable by the office.
+    numbers: { corps: PESO(30000), vice: PESO(20000), second: PESO(10000), third: PESO(10000), fourth: PESO(5000) },
     assessment: {
       amount: { type: 'number', min: 0, max: 100000, step: 1 },
     },
@@ -149,8 +157,10 @@ const OFFICE_FORMS = {
     assessment: {
       interviewDate: { type: 'date' },
       interviewTime: { type: 'time' },
-      grant: { type: 'number', min: 0, max: 200000, step: 1 },
+      grant: { type: 'number', min: 0, max: 200000, step: 1, maxFrom: n => n.fund },
     },
+    // The semester's scholarship fund (₱).
+    numbers: { fund: PESO(200000, 5000000) },
   },
   // CCJESG: the grant is capped by position (₱10,000 / ₱7,000 / ₱6,000).
   s17: {
@@ -162,8 +172,10 @@ const OFFICE_FORMS = {
     assessment: {
       interviewDate: { type: 'date' },
       evaluationPassed: { type: 'bool' },
-      grant: { type: 'number', min: 0, max: 10000, step: 1 },
+      grant: { type: 'number', min: 0, max: 10000, step: 1, maxFrom: n => Math.max(n.governor, n.viceGovernor, n.chiefOfStaff, n.executive, n.legislative) },
     },
+    // The most each position gets a semester (₱).
+    numbers: { governor: PESO(10000), viceGovernor: PESO(10000), chiefOfStaff: PESO(7000), executive: PESO(7000), legislative: PESO(6000) },
   },
 };
 
@@ -213,13 +225,42 @@ function officeDocuments(scholarshipId, answers) {
   return docs[answers?.[docs.by]] ?? [];
 }
 
-// The office's assessment; fields left empty are cleared.
-function parseAssessment(scholarshipId, raw) {
+// A scholarship's office numbers: the defaults with the office's saved
+// changes ({ key: number }).
+function officeNumbers(scholarshipId, saved) {
+  const spec = OFFICE_FORMS[scholarshipId]?.numbers ?? {};
+  return Object.fromEntries(Object.entries(spec).map(([k, r]) => [k, typeof saved?.[k] === 'number' ? saved[k] : r.default]));
+}
+
+// The office's changes to its numbers, checked; only the ones that differ
+// from the defaults are kept. { value } or { error }.
+function parseOfficeNumbers(scholarshipId, raw) {
+  const spec = OFFICE_FORMS[scholarshipId]?.numbers;
+  if (!spec) return { error: 'This scholarship has no amounts to set.' };
+  if (!raw || typeof raw !== 'object') return { error: 'Invalid amounts.' };
+  const value = {};
+  for (const [key, v] of Object.entries(raw)) {
+    const rule = spec[key];
+    if (!rule) return { error: 'Invalid amounts.' };
+    if (v === null || v === '') continue;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < rule.min || n > rule.max) return { error: `Each amount must be between ${rule.min.toLocaleString('en-US')} and ${rule.max.toLocaleString('en-US')}.` };
+    const rounded = rule.step >= 1 ? Math.round(n) : Math.round(n * 100) / 100;
+    if (rounded !== rule.default) value[key] = rounded;
+  }
+  return { value };
+}
+
+// The office's assessment; fields left empty are cleared. `saved` is the
+// office's numbers, for limits that follow them (e.g. the CEAT fund).
+function parseAssessment(scholarshipId, raw, saved) {
   const form = OFFICE_FORMS[scholarshipId];
   if (!form?.assessment) return { error: 'This scholarship has no office assessment.' };
   const body = raw && typeof raw === 'object' ? raw : {};
   const value = {};
-  for (const [key, rule] of Object.entries(form.assessment)) {
+  const nums = officeNumbers(scholarshipId, saved);
+  for (const [key, baseRule] of Object.entries(form.assessment)) {
+    const rule = baseRule.maxFrom ? { ...baseRule, max: baseRule.maxFrom(nums) } : baseRule;
     const parsed = parseValue(rule, body[key]);
     if (parsed.error) return { error: 'Check the values: one is out of range.' };
     if (parsed.value !== undefined) value[key] = parsed.value;
@@ -227,4 +268,4 @@ function parseAssessment(scholarshipId, raw) {
   return { value };
 }
 
-module.exports = { OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment };
+module.exports = { OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment, officeNumbers, parseOfficeNumbers };

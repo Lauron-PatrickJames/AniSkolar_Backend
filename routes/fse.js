@@ -135,9 +135,13 @@ router.delete('/:id', requireAdso, async (req, res) => {
   const id = toId(req.params.id);
   if (!id) return res.status(400).json({ error: 'Invalid report id.' });
   try {
-    const deleted = await FseReport.findByIdAndDelete(id);
-    if (!deleted) return res.status(404).json({ error: 'Report not found.' });
-    res.json({ success: true });
+    const report = await FseReport.findById(id);
+    if (!report) return res.status(404).json({ error: 'Report not found.' });
+    // To the Trash for 30 days.
+    await require('../utils/trash').moveToTrash({
+      kind: 'fseReport', doc: report, title: `FSE report: ${report.term}, AY ${report.academicYear}`, office: 'LSO', by: req.adminUser,
+    });
+    res.json({ success: true, trashed: true });
   } catch (err) {
     console.error('Delete FSE report error:', err);
     res.status(500).json({ error: 'Failed to delete the FSE report.' });
