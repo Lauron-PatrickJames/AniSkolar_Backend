@@ -45,9 +45,11 @@ const DutyLog = require('../models/DutyLog');
 const DutySetting = require('../models/DutySetting');
 const DutyEvent = require('../models/DutyEvent');
 const Message = require('../models/Message');
+const ScholarshipSetting = require('../models/ScholarshipSetting');
 const MessageThread = require('../models/MessageThread');
 const { RENEWAL_DOCUMENTS } = require('../models/RenewalPeriod');
 const { findScholarship } = require('../data/scholarships');
+const { officeDocuments } = require('../data/officeForms');
 const { findProgram } = require('../data/programs');
 const { nextReferenceCode } = require('../utils/referenceCode');
 const { EVALUATION_ITEMS } = require('../utils/renewals');
@@ -60,6 +62,26 @@ const REVIEWERS = {
   LSO: { email: ADMIN, name: ADMIN_NAME },
   POLCA: { email: 'demo.polca@dlsud.edu.ph', name: 'POLCA (demo)' },
   ALUMNI: { email: 'demo.alumni@dlsud.edu.ph', name: 'Alumni Office (demo)' },
+  SDO: { email: 'demo.sdo@dlsud.edu.ph', name: 'SDO (demo)' },
+  VICISSITUDE: { email: 'demo.vicissitude@dlsud.edu.ph', name: 'Vicissitude (demo)' },
+  ROTC: { email: 'demo.rotc@dlsud.edu.ph', name: 'ROTC Office (demo)' },
+  USG: { email: 'demo.usg@dlsud.edu.ph', name: 'USG (demo)' },
+  HERALDO: { email: 'demo.heraldo@dlsud.edu.ph', name: 'Heraldo Filipino (demo)' },
+  CBAASG: { email: 'demo.cbaasg@dlsud.edu.ph', name: 'CBAASG (demo)' },
+  CICSSG: { email: 'demo.cicssg@dlsud.edu.ph', name: 'CICSSG (demo)' },
+  CEATSG: { email: 'demo.ceatsg@dlsud.edu.ph', name: 'CEATSG (demo)' },
+  CCJESG: { email: 'demo.ccjesg@dlsud.edu.ph', name: 'CCJESG (demo)' },
+};
+
+// Documents for the partner offices' scholarships (as listed on each
+// scholarship's page); CBAASG, SDO and ROTC follow the office form.
+const OFFICE_DOCS = {
+  s8: () => ['Certificate of Registration (COR)', 'Copy of grades from the previous semester'],
+  s11: () => ['Application letter addressed to the University Student Government', 'Financial Aid Grant Application Form', 'Certificate of Registration (COR) for the current semester', 'Copy of grades from the previous semester', "Parents' ITR or Certificate of Indigency", 'Photograph of the house with the applicant and parent/guardian', 'Electricity and water bills (last 3 months)', 'DLSU-D ID', "Parent/guardian's government-issued ID", 'SWAFO clearance'],
+  s12: () => ['Certificate of Registration (COR)', 'List of published works this term'],
+  s15: () => ['Letter of intent', 'Certificate of Registration (COR)', 'Copy of grades from the previous semester', 'Letter of recommendation', 'Income Tax Return (ITR) or Certificate of Employment', 'Water bills (last 2 months)', 'Electricity bills (last 2 months)', 'Photo of the inside of the house', 'Photo of the outside of the house'],
+  s16: () => ['Certificate of Registration (COR)', 'Grades from the previous semester', "Parents' latest ITR or affidavit of non-filing", 'Written application to the CEATSG Governor', 'Electricity and water billing statements', 'Vicinity map', 'Photos of the household'],
+  s17: () => ['Recommendation letter from the Department Chair', 'Copy of grades', 'Certificate of Registration (COR)', 'Certificate of Indigency'],
 };
 const d = s => new Date(s);
 
@@ -135,6 +157,18 @@ const PEOPLE = [
   ['Joshua', 'Fernandez', 'Pascual', 'BSAM', '4th Year', 3.9],
   ['Nicole', 'Valdez', 'Soriano', 'ABComm', '1st Year', 3.25],
   ['Gabriel', 'Manalo', 'Tolentino', 'BSArch', '2nd Year', 3.05],
+  // For the partner offices' scholarships (Nov 2026).
+  ['Andrea', 'Lopez', 'Cruz', 'BSIT', '3rd Year', 3.4],
+  ['Miguel', 'Reyes', 'Santiago', 'BSCS', '4th Year', 3.1],
+  ['Sofia', 'Garcia', 'del Rosario', 'BSA', '2nd Year', 3.5],
+  ['Daniel', 'Cruz', 'Bautista', 'BSBA-MM', '3rd Year', 3.2],
+  ['Lea', 'Santos', 'Manalo', 'BSCrim', '3rd Year', 3.3],
+  ['Enzo', 'Ramos', 'Villar', 'BSCE', '2nd Year', 3.0],
+  ['Bianca', 'Flores', 'Aquino', 'BSCpE', '3rd Year', 3.45],
+  ['Kevin', 'Navarro', 'Dizon', 'BSPsych', '1st Year', 3.2],
+  ['Camille', 'Torres', 'Ramirez', 'ABComm', '2nd Year', 3.6],
+  ['Rico', 'Mendoza', 'Pascual', 'BSEd-Eng', '3rd Year', 2.8],
+  ['Ivy', 'Gomez', 'Castro', 'ABComm', '3rd Year', 3.4],
 ];
 
 // Sign-up today: everything but the telephone is filled in, confirmed.
@@ -243,9 +277,9 @@ function history(steps, office = 'LSO') {
   async function app(s, scholarshipId, status, opts = {}) {
     const sch = findScholarship(scholarshipId);
     const created = d(opts.created);
-    const steps = [['Submitted', opts.created]];
+    const steps = opts.direct ? [] : [['Submitted', opts.created]];
     if (opts.revised) steps.push(['Needs Revision', opts.revised, 'Please upload a clearer copy of your certificate of indigency.'], ['Resubmitted', opts.resubmitted || opts.revised]);
-    if (status !== 'Submitted' && status !== 'Resubmitted') steps.push(['Under Evaluation', opts.evaluated || opts.created]);
+    if (!opts.direct && status !== 'Submitted' && status !== 'Resubmitted') steps.push(['Under Evaluation', opts.evaluated || opts.created]);
     if (status === 'Approved') steps.push(['Approved', opts.decided, opts.note]);
     if (status === 'Rejected') steps.push(['Rejected', opts.decided, opts.note || 'Your family income is above the bracket for this grant this year.']);
     if (status === 'Needs Revision') steps.push(['Needs Revision', opts.decided, opts.note || 'Please upload a clearer copy of your certificate of indigency.']);
@@ -255,6 +289,8 @@ function history(steps, office = 'LSO') {
     else if (scholarshipId === 's2') documents = await docs(['Certificate of Ranking (number of graduates)', 'Grade 12 Report Card / Form 138'], owner);
     else if (scholarshipId === 's6') documents = await docs(['Latest report card', 'Certificate of employment of parent (DLSU-D)', 'PSA birth certificate'], owner);
     else if (scholarshipId === 's3') documents = await docs(['Letter from parent/guardian', 'Personal essay with 2x2 photo', 'Certificate of indigency', "Parents' latest ITR", 'Senior HS grades', 'Recommendation letter', 'Pictures of the residence', 'Vicinity sketch map', 'DLSU-D entrance test result', '2x2 photo'], owner, ['parentLetter', 'personalEssay', 'indigency', 'incomeProof', 'shsGrades', 'recommendationLetter', 'residencePictures', 'vicinityMap', 'entranceTestResult', 'photo2x2']);
+    else if (OFFICE_DOCS[scholarshipId]) documents = await docs(OFFICE_DOCS[scholarshipId](), owner);
+    else if (opts.answers && officeDocuments(scholarshipId, opts.answers)) documents = await docs(officeDocuments(scholarshipId, opts.answers), owner);
     else documents = await docs(['PSA birth certificate', 'Letter from parent', "Parents' latest ITR", 'Certificate of employment', 'Grade 12 report card', 'Vicinity sketch map', 'DLSU-D entrance test result', 'Proof of relation to alumnus'], owner, ['psaBirthCertificate', 'parentLetter', 'incomeProof', 'employmentCertificate', 'grade12Card', 'vicinityMap', 'entranceTestResult', 'proofOfRelation']);
 
     const doc = {
@@ -264,7 +300,9 @@ function history(steps, office = 'LSO') {
       history: history(steps, sch.office), createdAt: created, updatedAt: d(opts.decided || opts.created),
     };
     if (['Approved', 'Rejected', 'Needs Revision'].includes(status)) Object.assign(doc, { reviewedBy: REVIEWERS[sch.office].email, reviewedAt: d(opts.decided), reviewNote: steps[steps.length - 1][2], decisionOffice: sch.office });
-    if (sch.formType === 'standard') doc.standardInfo = standardInfo(s);
+    if (sch.formType === 'standard') doc.standardInfo = { ...standardInfo(s), ...(opts.answers ? { officeAnswers: opts.answers } : {}) };
+    if (opts.assessment) doc.officeAssessment = { ...opts.assessment, ...(opts.direct ? { directorApproved: true } : {}), updatedBy: REVIEWERS[sch.office].email, updatedAt: d(opts.decided || opts.evaluated || opts.created) };
+    if (opts.direct) doc.awardedDirectly = true;
     if (sch.formType === 'sfag') Object.assign(doc, grantSections(s));
     if (sch.formType === 'polca') Object.assign(doc, grantSections(s, { eligibilityAnswers: { hsGeneralAverage: 91, lowestHsGrade: 85, notRelatedToBoardMember: true }, evaluationSheet: { statements: { applicant: { agreed: true, name: owner, date: opts.created.slice(0, 10) }, parent: { agreed: true, name: s.motherName, date: opts.created.slice(0, 10) } } } }));
     if (sch.formType === 'alumni') Object.assign(doc, grantSections(s, { eligibilityAnswers: { alumnusName: s.fatherName, relationship: 'Parent', institution: 'DLSU-Dasmariñas', batchYear: 1999 } }));
@@ -335,10 +373,42 @@ function history(steps, office = 'LSO') {
   await app(S[4], 's4', 'Approved', { created: '2022-06-11T09:00:00+08:00', decided: '2022-06-30T09:00:00+08:00', ended: '2026-06-30T09:00:00+08:00' });
   await app(S[1], 's4', 'Approved', { created: '2022-06-12T09:00:00+08:00', decided: '2022-06-30T09:00:00+08:00', ended: '2026-06-30T09:00:00+08:00' });
 
+  // --- Partner offices' scholarships (Nov 2026) ---------------------------------
+  const T = (date, time = '09:00') => `${date}T${time}:00+08:00`;
+  // CICSSG Padayon Pioneers (2 grantees, one semester): one granted, one
+  // with an interview booked, one new. CICS students only.
+  const padayon = { noMajorOffense: true, noAllowanceScholarship: true };
+  await app(S[14], 's15', 'Approved', { created: T('2026-08-20'), evaluated: T('2026-08-25'), decided: T('2026-09-05'), answers: padayon, assessment: { interviewDate: '2026-09-01', interviewTime: '14:00' }, note: 'Congratulations! You are one of this semester\'s Padayon Pioneers grantees (50%, up to ₱50,000).' });
+  await app(S[15], 's15', 'Under Evaluation', { created: T('2026-11-03'), evaluated: T('2026-11-06'), answers: padayon, assessment: { interviewDate: '2026-11-18', interviewTime: '10:30' } });
+  await app(S[1], 's15', 'Submitted', { created: T('2026-11-10'), answers: padayon });
+  // CBAASG: Achie (one per department) and the officers' 25%.
+  await app(S[16], 's13', 'Submitted', { created: T('2026-11-09'), answers: { department: 'ACD', noOtherScholarship: true, noMajorOffense: true, taxExemption: 'yes' } });
+  await app(S[9], 's13', 'Under Evaluation', { created: T('2026-11-02'), evaluated: T('2026-11-05'), answers: { department: 'BMD', noOtherScholarship: true, noMajorOffense: true, taxExemption: 'no' }, assessment: { initialInterview: '2026-11-16', finalInterview: '2026-11-23' } });
+  await app(S[17], 's14', 'Approved', { created: T('2026-08-18'), evaluated: T('2026-08-22'), decided: T('2026-09-02'), answers: { branch: 'executive', position: 'Vice President for Finance', activeInvolvement: true, noMajorOffense: true, taxExemption: 'no' }, assessment: { initialInterview: '2026-08-26', finalInterview: '2026-08-29' }, note: 'Approved: 25% of tuition, miscellaneous and other fees.' });
+  // CEATSG Financial Aid: one granted, one waiting for the interview.
+  await app(S[8], 's16', 'Approved', { created: T('2026-08-19'), evaluated: T('2026-08-24'), decided: T('2026-09-04'), answers: { noConcurrentScholarship: true }, assessment: { interviewDate: '2026-08-28', interviewTime: '13:00', grant: 25000 }, note: 'Granted ₱25,000 from this semester\'s CEATSG scholarship fund.' });
+  await app(S[19], 's16', 'Under Evaluation', { created: T('2026-11-04'), evaluated: T('2026-11-07'), answers: { noConcurrentScholarship: true }, assessment: { interviewDate: '2026-11-17', interviewTime: '15:00' } });
+  // CCJESG officers' grant (capped by position).
+  await app(S[18], 's17', 'Approved', { created: T('2026-08-21'), evaluated: T('2026-08-26'), decided: T('2026-09-06'), answers: { position: 'chiefOfStaff', noViolation: true, activeOfficer: true }, assessment: { interviewDate: '2026-08-31', evaluationPassed: true, grant: 7000 }, note: 'Approved: ₱7,000 for this semester, credited at the end of the term.' });
+  await app(S[5], 's17', 'Needs Revision', { created: T('2026-11-03'), evaluated: T('2026-11-05'), decided: T('2026-11-07'), answers: { position: 'legislative', noViolation: true, activeOfficer: true }, note: 'Please upload your Certificate of Indigency; the file you sent is your COR.' });
+  // USG SFAG: last semester's grantee (can apply again) and this call.
+  const usg = { noOtherScholarship: true, noMajorOffense: true };
+  await app(S[23], 's11', 'Approved', { created: T('2026-04-08'), evaluated: T('2026-04-10'), decided: T('2026-04-20'), answers: usg, assessment: { verified: true, onsiteDate: '2026-04-15', onsiteTime: '10:00' }, note: 'You are one of the 35 grantees for the 2nd semester (₱15,000).' });
+  await app(S[23], 's11', 'Submitted', { created: T('2026-11-10'), answers: usg });
+  await app(S[22], 's11', 'Approved', { created: T('2026-09-01'), evaluated: T('2026-09-03'), decided: T('2026-09-15'), answers: usg, assessment: { verified: true, onsiteDate: '2026-09-08', onsiteTime: '13:30' }, note: 'Verified and confirmed on-site. ₱15,000 credited to your student account.' });
+  await app(S[24], 's11', 'Under Evaluation', { created: T('2026-11-05'), evaluated: T('2026-11-06'), answers: usg, assessment: { verified: false } });
+  // Heraldo Filipino and Vicissitude (their staff).
+  await app(S[22], 's12', 'Under Evaluation', { created: T('2026-10-20'), evaluated: T('2026-10-22'), answers: { position: 'section', publishedWorks: 5 }, assessment: { evaluationScore: 92, publishedWorks: 5, officeHours: 94, merit: '2' } });
+  await app(S[24], 's8', 'Approved', { created: T('2026-08-15'), evaluated: T('2026-08-20'), decided: T('2026-08-30'), answers: { member: 'board', position: 'Layout Artist', dutyHours: 40 }, assessment: { coordinatorScore: 4.6, boardScore: 4.8 }, note: 'Rating 4.68: 75% tuition discount.' });
+  // Added by the office itself (no application): an SDO varsity player and
+  // an ROTC officer (one semester, amount from the rank).
+  await app(S[21], 's7', 'Approved', { direct: true, created: T('2026-08-12'), decided: T('2026-08-12'), answers: { playerType: 'incoming', sport: 'Basketball', coach: 'Coach Ramon Dizon' }, assessment: { tuitionDiscount: 75, matriculation: true }, note: 'Welcome to the team! Your discount starts this semester.' });
+  await app(S[20], 's10', 'Approved', { direct: true, created: T('2026-08-14'), decided: T('2026-08-14'), answers: { rank: 'vice', activeDuty: true }, assessment: { amount: 20000 }, note: 'Congratulations on your rank! Your assistance is for this semester.' });
+
   // Real students: an approved SFAG so the student side has duty hours.
   for (const [i, r] of realStudents.entries()) {
     const s = { ...r, firstName: r.firstName || 'Student', middleName: r.middleName || '', lastName: r.lastName || 'Demo', mobileNumber: r.mobileNumber || '09170000000', homeAddress: r.homeAddress || 'Dasmariñas', course: r.course || 'Bachelor of Science in Information Technology', yearLevel: r.yearLevel || '3rd Year', gpa: r.gpa ?? 3.2, dateOfBirth: r.dateOfBirth || d('2005-01-01'), fatherName: r.fatherName || 'Father', motherName: r.motherName || 'Mother' };
-    await app(s, 's1', 'Approved', { created: `2026-06-2${i + 5}T09:00:00+08:00`, decided: '2026-07-22T09:00:00+08:00', percentage: [50, 75, 25][i % 3], requested: [50, 100, 50][i % 3], note: 'Sample approval (demo data).' });
+    await app(s, 's1', 'Approved', { created: `2026-06-${String(15 + (i % 15)).padStart(2, '0')}T09:00:00+08:00`, decided: '2026-07-22T09:00:00+08:00', percentage: [50, 75, 25][i % 3], requested: [50, 100, 50][i % 3], note: 'Sample approval (demo data).' });
   }
   // Validated through the model, inserted raw so the sample dates stay.
   await db.collection('applications').insertMany(await Promise.all(apps.map(async a => {
@@ -523,6 +593,15 @@ function history(steps, office = 'LSO') {
   const angelaLog = await DutyLog.findOne({ studentNumber: S[2].studentNumber, academicYear: 2026, term: '1st Semester' }).lean();
   await Renewal.create(await renewal(S[2], 'Under Evaluation', { gpa: 3.55, at: '2026-10-27', evaluation: angelaLog.evaluation }, nextPeriod));
 
+  // Partner offices' scholarships opened by their offices (they start closed).
+  await ScholarshipSetting.insertMany([
+    { scholarshipId: 's11', status: 'Open', opensOn: '2026-11-03', closesOn: '2026-11-20', updatedBy: REVIEWERS.USG.email },
+    { scholarshipId: 's13', status: 'Open', opensOn: '2026-11-01', closesOn: '2026-11-30', updatedBy: REVIEWERS.CBAASG.email },
+    { scholarshipId: 's15', status: 'Open', opensOn: '2026-11-01', closesOn: '2026-12-31', updatedBy: REVIEWERS.CICSSG.email },
+    { scholarshipId: 's16', status: 'Open', opensOn: '2026-11-02', closesOn: '2026-11-27', updatedBy: REVIEWERS.CEATSG.email },
+    { scholarshipId: 's17', status: 'Open', opensOn: '2026-11-02', closesOn: '2026-11-25', updatedBy: REVIEWERS.CCJESG.email },
+  ]);
+
   // Announcements
   const image = bannerPng();
   const imageId = await store.putFile({ buffer: image, filename: 'sfag-orientation.png', mimetype: 'image/png', metadata: { kind: 'announcement-image' } });
@@ -532,6 +611,9 @@ function history(steps, office = 'LSO') {
     { title: 'Entrance Scholarship results are out', description: 'Check your application status on AniSkolar.', content: 'Results of the Entrance Scholarship for A.Y. 2026–2027 are now available. Check your application status on AniSkolar.', category: 'Update', status: 'published', publishedAt: d('2026-06-26T09:00:00+08:00'), scholarshipId: 's2', createdBy: ADMIN_NAME },
     { title: 'Christmas Outreach with COSA', description: 'Join COSA on December 5. Credited 3 duty hours.', content: 'COSA invites all scholars to the Christmas Outreach on December 5, 2026. Attendance is credited 3 duty hours (claim it on your Duty Hours page after the event).', category: 'Event', status: 'scheduled', scheduledFor: d('2026-11-20T09:00:00+08:00'), createdBy: ADMIN_NAME },
     { title: 'Draft: SFAG applications for A.Y. 2027–2028', description: 'Applications open in June 2027.', content: 'Draft — to be finalized with the office.', category: 'General', status: 'draft', createdBy: ADMIN_NAME },
+    // A partner office's announcement waiting for the AdSO's approval.
+    { title: 'Padayon Pioneers: interview schedules', description: 'Shortlisted applicants, check your DLSU-D email for your interview slot.', content: 'Shortlisted Padayon Pioneers applicants: your interview schedule has been sent to your DLSU-D email. To reschedule, tell the CICSSG at least one day before.\n\nVenue: PCH 102', category: 'Update', status: 'pending', office: 'CICSSG', scholarshipId: 's15', createdBy: REVIEWERS.CICSSG.name, review: { requestedStatus: 'published', requestedAt: d('2026-11-11T16:00:00+08:00'), requestedBy: REVIEWERS.CICSSG.email } },
+    { title: 'CEAT Financial Aid: applications open', description: 'Apply until November 27. ₱200,000 set aside this semester.', content: 'The CEAT Financial Aid Scholarship is open until November 27, 2026. This semester\'s criteria (minimum GPA, failing units, unit load) are in the scholarship page.', category: 'Deadline', status: 'published', publishedAt: d('2026-11-02T09:00:00+08:00'), office: 'CEATSG', scholarshipId: 's16', createdBy: REVIEWERS.CEATSG.name, review: { decision: 'approved', decidedAt: d('2026-11-02T08:30:00+08:00'), decidedBy: ADMIN } },
   ]);
 
   // Messages with the AdSO: a finished exchange, an unread question with a
@@ -555,6 +637,14 @@ function history(steps, office = 'LSO') {
     msg(S[8], 'adso', '2026-07-12T10:00:00+08:00', 'Hi Jasmine, your SFAG application needs a clearer copy of your certificate of indigency. Please resubmit it on AniSkolar.', { unread: true }),
     msg(S[5], 'student', '2026-10-20T10:30:00+08:00', 'Correction request (Personal details):\nMy middle name is Tolentino, not Torres. I attached my PSA birth certificate in Messages.', { unread: true }),
     ...(realStudents[0] ? [msg(realStudents[0], 'adso', '2026-10-17T15:00:00+08:00', 'Hi! This is a sample message from the AdSO (demo data). You can reply here.', { unread: true })] : []),
+  ]);
+
+  // Per-office inboxes: each office talks with its own applicants.
+  await db.collection('messages').insertMany([
+    msg(S[15], 'adso', '2026-11-06T11:00:00+08:00', 'Hi Miguel! Your Padayon Pioneers interview is on November 18, 10:30 AM at PCH 102. Please bring your COR.', { more: { inbox: 'CICSSG', authorName: REVIEWERS.CICSSG.name, authorEmail: REVIEWERS.CICSSG.email } }),
+    msg(S[15], 'student', '2026-11-06T12:10:00+08:00', 'Noted po, see you!', { more: { inbox: 'CICSSG' } }),
+    msg(S[16], 'student', '2026-11-10T08:45:00+08:00', 'Good morning po! Is the Certificate of Tax Exemption required, or only if we have one?', { unread: true, more: { inbox: 'CBAASG' } }),
+    msg(S[5], 'adso', '2026-11-07T09:30:00+08:00', 'Hi Paolo, the file you uploaded for the Certificate of Indigency is your COR. Please resubmit with the correct file.', { unread: true, more: { inbox: 'CCJESG', authorName: REVIEWERS.CCJESG.name, authorEmail: REVIEWERS.CCJESG.email } }),
   ]);
 
   // The AdSO's inbox: Maria's chat pinned, Jasmine's archived.
