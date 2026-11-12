@@ -47,6 +47,11 @@
 //     on an answer in the submitted form.
 
 const { OFFICE_CODES: OFFICES } = require('./offices');
+// Every CBAA program: the CBAASG scholarships are for CBAA students only.
+const CBAA_PROGRAMS = require('./programs').PROGRAMS.filter(p => p.college === 'CBAA').map(p => p.code);
+const CICS_PROGRAMS = require('./programs').PROGRAMS.filter(p => p.college === 'CICS').map(p => p.code);
+const CEAT_PROGRAMS = require('./programs').PROGRAMS.filter(p => p.college === 'CEAT').map(p => p.code);
+const CCJE_PROGRAMS = require('./programs').PROGRAMS.filter(p => p.college === 'CCJE').map(p => p.code);
 
 const ALUMNI_INSTITUTIONS = ['DLSU-EAC', 'DLSU-Aguinaldo', 'DLSU-Dasmariñas'];
 // 1st and 2nd degree of consanguinity only.
@@ -127,6 +132,17 @@ const SCHOLARSHIPS = [
   { id: 's10', defaultStatus: 'Closed', name: '267th NROTC Scholarship', office: 'ROTC', formType: 'standard', referenceCode: 'ROTC' },
   { id: 's11', defaultStatus: 'Closed', name: 'USG Student Financial Aid Grant', office: 'USG', formType: 'standard', referenceCode: 'USGF' },
   { id: 's12', defaultStatus: 'Closed', name: 'Heraldo Filipino Scholarship', office: 'HERALDO', formType: 'standard', referenceCode: 'HF' },
+  // CBAASG Ordinance No. 01, s. 2021–2022: for CBAA students only (the
+  // office can change the programs; its saved rules then apply instead).
+  { id: 's13', defaultStatus: 'Closed', name: 'CBAASG Achie Scholarship', office: 'CBAASG', formType: 'standard', referenceCode: 'ACHIE', programs: CBAA_PROGRAMS },
+  { id: 's14', defaultStatus: 'Closed', name: 'CBAASG Officers’ Partial Scholarship', office: 'CBAASG', formType: 'standard', referenceCode: 'CBAO', programs: CBAA_PROGRAMS },
+  // CICSSG's Padayon Pioneers: two grantees, CICS students only.
+  { id: 's15', defaultStatus: 'Closed', name: 'Padayon Pioneers: CICS Student Financial Aid Grant', office: 'CICSSG', formType: 'standard', referenceCode: 'PADAYON', programs: CICS_PROGRAMS, totalSlots: 2 },
+  // CEATSG Ordinance No. 02, s. 2025–2026: CEAT students only; the
+  // semester's numbers are set by the office (Scholarship Criteria Resolution).
+  { id: 's16', defaultStatus: 'Closed', name: 'CEAT Financial Aid Scholarship', office: 'CEATSG', formType: 'standard', referenceCode: 'CEAT', programs: CEAT_PROGRAMS },
+  // CCJESG Ordinance No. 251125: its officers' grant, at most 11 officers.
+  { id: 's17', defaultStatus: 'Closed', name: 'CCJESG Officers’ Financial Grant', office: 'CCJESG', formType: 'standard', referenceCode: 'CCJE', programs: CCJE_PROGRAMS, totalSlots: 11 },
 ];
 
 // Built-in scholarships, then the ones the AdSO created (standard form;
