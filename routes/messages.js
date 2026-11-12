@@ -13,17 +13,51 @@ const MessageThread = require('../models/MessageThread');
 const Student = require('../models/Student');
 const Application = require('../models/Application');
 const { putFile, deleteFile, openFile } = require('../utils/gridfs');
-const { queueEmails, processOutbox } = require('../utils/outbox');
+const { queueEmails } = require('../utils/outbox');
 
 // The email alert for a new message ("you have a new message"), through the
 // outbox (utils/outbox.js): sent within the sender's limits and retried
-// instead of lost. Never fails the request.
+// instead of lost. Never fails the request. It waits 2 minutes, so a
+// message unsent right away never reaches anyone's email.
+const ALERT_DELAY_MS = 2 * 60 * 1000;
 function alertByEmail(message, { to, subject, email }) {
   const list = Array.isArray(to) ? to : [to];
-  queueEmails(list.map((addr, i) => ({ key: i ? `message:${message._id}:${i}` : `message:${message._id}`, kind: 'messageAlert', priority: 1, to: addr, subject, ...email })))
-    .then(n => n && processOutbox())
+  const sendAt = new Date(Date.now() + ALERT_DELAY_MS);
+  queueEmails(list.map((addr, i) => ({ key: i ? `message:${message._id}:${i}` : `message:${message._id}`, kind: 'messageAlert', priority: 1, to: addr, subject, nextAttemptAt: sendAt, ...email })))
     .catch(err => console.error('Queueing the message alert failed:', err));
 }
+
+// --- Unsending -------------------------------------------------------------------
+// The writer can unsend a message within 24 hours: its text, files and
+// mentioned application are removed for both sides, and an email alert
+// still waiting is cancelled. Returns { message, emailSent } or
+// { status, error }.
+const UNSEND_WINDOW_MS = 24 * 60 * 60 * 1000;
+async function unsendMessage(m) {
+  if (m.unsentAt) return { status: 409, error: 'It’s already unsent.' };
+  if (Date.now() - new Date(m.createdAt).getTime() > UNSEND_WINDOW_MS) {
+    return { status: 409, error: 'Messages can only be unsent within 24 hours of sending.' };
+  }
+  const OutboxEmail = require('../models/OutboxEmail');
+  const keys = { key: { $regex: `^message:${m._id}(:|$)` } };
+  await OutboxEmail.deleteMany({ ...keys, status: 'queued' });
+  const emailSent = !!(await OutboxEmail.exists({ ...keys, status: 'sent' }));
+  const files = (m.attachments || []).map(a => a.fileId);
+  const now = new Date();
+  await Message.updateOne({ _id: m._id }, {
+    $set: { unsentAt: now, body: '', attachments: [], readAt: m.readAt || now },
+    $unset: { applicationId: '', applicationRef: '' },
+  });
+  for (const fileId of files) await deleteFile(fileId).catch(err => console.error('Deleting an unsent message’s file failed:', err.message));
+  return { message: { ...m, unsentAt: now, body: '', attachments: [], applicationId: null, applicationRef: null, readAt: m.readAt || now }, emailSent };
+}
+
+const findMessage = async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) { res.status(404).json({ error: 'Message not found.' }); return null; }
+  const m = await Message.findById(req.params.id).lean();
+  if (!m) res.status(404).json({ error: 'Message not found.' });
+  return m;
+};
 const { renderEmail } = require('../utils/emailTemplate');
 const { requireOfficeHead } = require('../middleware/requireOfficeHead');
 const { listOffices, norm } = require('../utils/offices');
@@ -154,6 +188,7 @@ function view(m) {
     applicationId: m.applicationId ? String(m.applicationId) : null,
     applicationRef: m.applicationRef ?? null,
     readAt: m.readAt,
+    unsentAt: m.unsentAt ?? null,
     createdAt: m.createdAt,
   };
 }
@@ -910,6 +945,60 @@ router.get('/files/:fileId', requireStudentOrAdmin, async (req, res) => {
   } catch (err) {
     console.error('Message file error:', err);
     res.status(500).json({ error: 'Failed to load the file.' });
+  }
+});
+
+// Unsend (within 24 hours), by whoever wrote it.
+//   POST /api/messages/mine/:id/unsend         a student's own message
+//   POST /api/messages/admin/:id/unsend        an office admin's (its own office's)
+//   POST /api/messages/office/mine/:id/unsend  a duty office head's
+const sendUnsend = async (res, m) => {
+  const result = await unsendMessage(m);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+  res.json({ message: view(result.message), emailSent: result.emailSent });
+};
+
+router.post('/mine/:id/unsend', requireStudent, async (req, res) => {
+  try {
+    const m = await findMessage(req, res);
+    if (!m) return;
+    if (m.studentNumber !== req.studentNumber || m.from !== 'student') return res.status(404).json({ error: 'Message not found.' });
+    await sendUnsend(res, m);
+  } catch (err) {
+    console.error('Unsend message (student) error:', err);
+    res.status(500).json({ error: 'Failed to unsend the message.' });
+  }
+});
+
+router.post('/admin/:id/unsend', requireAdmin, async (req, res) => {
+  try {
+    const m = await findMessage(req, res);
+    if (!m) return;
+    const me = req.adminUser.office;
+    const email = (req.adminUser.email || '').toLowerCase();
+    const byMe = !m.authorEmail || m.authorEmail.toLowerCase() === email;
+    const mine = m.from === 'adso' && byMe && (
+      (m.studentNumber && (m.inbox || ADSO) === me)        // to a student
+      || (m.peer && m.fromOffice === me)                   // to another office
+      || (m.office && !m.peer && me === ADSO)              // the AdSO to a duty office
+    );
+    if (!mine) return res.status(404).json({ error: 'Message not found.' });
+    await sendUnsend(res, m);
+  } catch (err) {
+    console.error('Unsend message (admin) error:', err);
+    res.status(500).json({ error: 'Failed to unsend the message.' });
+  }
+});
+
+router.post('/office/mine/:id/unsend', requireOfficeHead, async (req, res) => {
+  try {
+    const m = await findMessage(req, res);
+    if (!m) return;
+    if (m.from !== 'office' || norm(m.office) !== norm(req.officeHead.office)) return res.status(404).json({ error: 'Message not found.' });
+    await sendUnsend(res, m);
+  } catch (err) {
+    console.error('Unsend message (office head) error:', err);
+    res.status(500).json({ error: 'Failed to unsend the message.' });
   }
 });
 

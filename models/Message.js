@@ -35,6 +35,9 @@ const messageSchema = new mongoose.Schema({
   applicationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Application' },
   applicationRef: String,          // its reference code, for display
   readAt: { type: Date, default: null },
+  // Unsent by its writer within 24 hours: its text and files are removed
+  // and both sides see "This message was unsent" (routes/messages.js).
+  unsentAt: { type: Date, default: null },
 }, { timestamps: true });
 
 messageSchema.index({ studentNumber: 1, createdAt: 1 });
