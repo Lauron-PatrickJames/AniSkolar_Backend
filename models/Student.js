@@ -90,9 +90,13 @@ const studentSchema = new mongoose.Schema({
     fatherName: String,
     fatherContactNo: String,
     fatherDeceased: Boolean,
+    // Not part of the student's life (solo-parent household, unknown parent):
+    // no name or contact number.
+    fatherAbsent: Boolean,
     motherName: String,
     motherContactNo: String,
     motherDeceased: Boolean,
+    motherAbsent: Boolean,
     // Who the guardian is. 'father' / 'mother' copy that parent into the
     // guardian fields below on save, so readers of guardianName etc. (the
     // application forms) keep working; 'other' is someone else.
