@@ -1,6 +1,6 @@
 // The status rules (npm test): which changes each status allows. Real
 // route code through Express; Clerk and the database are stubs.
-const { test, describe, beforeEach } = require('node:test');
+const { test, describe, beforeEach, before, after, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const { users, clerkUser, adsoAdmin, query, app, call } = require('./helpers');
 
@@ -67,10 +67,14 @@ describe('renewal decisions on "Not Continuing"', () => {
 // --- Duty hours: who may log, and duty identity ------------------------------
 describe('duty hours', () => {
   const a = app(require('../routes/dutyHours'), '/api/duty-hours');
-  const today = todayInManila();
+  // Duties are logged on the day, on weekdays only: the clock is fixed to a
+  // Wednesday in the term so these pass on any day (weekends included).
+  before(() => mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-11T04:00:00Z') }));
+  after(() => mock.timers.reset());
+  const today = '2026-11-11';
   const TERM = { academicYear: 2026, term: '1st Semester' };
   let update;
-  const sfagApproved = { scholarshipId: 's1', scholarshipName: 'SFAG', status: 'Approved', createdAt: new Date(), reviewedAt: new Date() };
+  const sfagApproved = { scholarshipId: 's1', scholarshipName: 'SFAG', status: 'Approved', createdAt: new Date('2026-08-01T02:00:00Z'), reviewedAt: new Date('2026-08-01T02:00:00Z') };
 
   beforeEach(() => {
     update = undefined;

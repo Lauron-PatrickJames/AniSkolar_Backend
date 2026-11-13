@@ -283,7 +283,7 @@ router.post('/direct-award', requireAdmin, (req, res) => {
           heading: `You're a ${scholarship.name} scholar`,
           intro: `The ${office.replace(/^the /i, '')} added you as a scholar.`,
           body: [
-            `Hi ${student.firstName || 'there'},`,
+            `Hi ${require('../utils/names').properName(student.firstName) || 'there'},`,
             '',
             `You've been granted the ${scholarship.name}${note ? `:\n\n${note}` : '.'}`,
             '',
