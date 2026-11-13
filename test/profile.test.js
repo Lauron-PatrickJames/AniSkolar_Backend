@@ -38,6 +38,11 @@ describe('profile completion', () => {
     assert.equal(full.percent, 100);
     const fatherDeceased = computeProfileCompletion({ ...CORE, section: 'BIT21', ...PERSONAL, ...CONTACT, ...family, fatherDeceased: true, fatherContactNo: undefined });
     assert.deepEqual(section(fatherDeceased, 'family').missing, ['guardianType']);
+    // A deceased parent's name is optional; a parent marked not applicable needs nothing.
+    const noName = computeProfileCompletion({ ...CORE, section: 'BIT21', ...PERSONAL, ...CONTACT, ...family, fatherDeceased: true, fatherName: undefined, fatherContactNo: undefined, guardianType: 'mother' });
+    assert.equal(section(noName, 'family').missing.length, 0);
+    const solo = computeProfileCompletion({ ...CORE, section: 'BIT21', ...PERSONAL, ...CONTACT, ...family, fatherAbsent: true, fatherName: undefined, fatherContactNo: undefined, guardianType: 'mother' });
+    assert.equal(section(solo, 'family').missing.length, 0);
   });
 });
 

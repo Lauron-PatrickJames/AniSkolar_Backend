@@ -37,7 +37,7 @@ const EDITABLE_FIELDS = [
   'dateOfBirth', 'nationality', 'placeOfBirth', 'civilStatus',
   'homeAddress', 'cityMunicipality', 'province', 'zipCode', 'country',
   'telephoneNumber', 'mobileNumber',
-  'fatherName', 'fatherContactNo', 'fatherDeceased', 'motherName', 'motherContactNo', 'motherDeceased',
+  'fatherName', 'fatherContactNo', 'fatherDeceased', 'fatherAbsent', 'motherName', 'motherContactNo', 'motherDeceased', 'motherAbsent',
   'guardianType', 'guardianName', 'guardianRelationship', 'guardianAddress', 'guardianAddressSameAsHome', 'guardianContactNo',
 ];
 
@@ -186,16 +186,21 @@ function sanitizeProfileFields(body) {
   }
   if (data.guardianType === '') data.guardianType = undefined;
   if (data.guardianAddressSameAsHome !== undefined) data.guardianAddressSameAsHome = data.guardianAddressSameAsHome === true;
-  for (const f of ['fatherDeceased', 'motherDeceased']) {
-    if (data[f] !== undefined) data[f] = data[f] === true;
-    if (data[f]) data[f.replace('Deceased', 'ContactNo')] = undefined;
+  for (const who of ['father', 'mother']) {
+    for (const f of [`${who}Deceased`, `${who}Absent`]) {
+      if (data[f] !== undefined) data[f] = data[f] === true;
+    }
+    if (data[`${who}Deceased`]) data[`${who}Absent`] = false;
+    if (data[`${who}Deceased`] || data[`${who}Absent`]) data[`${who}ContactNo`] = undefined;
+    if (data[`${who}Absent`]) data[`${who}Name`] = undefined;
   }
   if (data.nameSuffix !== undefined && data.nameSuffix !== '' && !Student.NAME_SUFFIXES.includes(data.nameSuffix)) {
     return { error: 'Choose a name suffix from the list.' };
   }
   if (data.nameSuffix === '') data.nameSuffix = undefined;
-  if ((data.guardianType === 'father' && data.fatherDeceased) || (data.guardianType === 'mother' && data.motherDeceased)) {
-    return { error: 'A deceased parent can’t be your guardian. Choose another guardian.' };
+  if ((data.guardianType === 'father' && (data.fatherDeceased || data.fatherAbsent))
+    || (data.guardianType === 'mother' && (data.motherDeceased || data.motherAbsent))) {
+    return { error: 'That parent can’t be your guardian. Choose another guardian.' };
   }
 
   return { data };

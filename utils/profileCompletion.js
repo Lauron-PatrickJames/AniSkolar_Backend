@@ -22,18 +22,24 @@ const SECTION_LABELS = {
 
 const filled = v => v !== undefined && v !== null && String(v).trim() !== '';
 
+// Living and part of the student's life.
+const present = (s, who) => !s[`${who}Deceased`] && !s[`${who}Absent`];
+
 // Living parents, both listed: no guardian needed.
 function needsGuardian(s) {
-  const father = filled(s.fatherName) && !s.fatherDeceased;
-  const mother = filled(s.motherName) && !s.motherDeceased;
+  const father = filled(s.fatherName) && present(s, 'father');
+  const mother = filled(s.motherName) && present(s, 'mother');
   return !(father && mother);
 }
 
 // Required fields per section for this student (some depend on others).
 function requiredFields(s) {
-  const family = ['fatherName', 'motherName'];
-  if (!s.fatherDeceased) family.push('fatherContactNo');
-  if (!s.motherDeceased) family.push('motherContactNo');
+  // A deceased parent's name is optional; a parent marked not applicable
+  // (solo parent, unknown) needs nothing.
+  const family = [];
+  for (const who of ['father', 'mother']) {
+    if (present(s, who)) family.push(`${who}Name`, `${who}ContactNo`);
+  }
   if (needsGuardian(s) || filled(s.guardianType)) {
     family.push('guardianType');
     if (s.guardianType === 'other') {
