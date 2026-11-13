@@ -324,7 +324,7 @@ router.post('/mine', requireStudent, withUpload, async (req, res) => {
     const result = await createMessage(req, { studentNumber: req.studentNumber, inbox, from: 'student', authorEmail: student?.email, authorName: student?.name });
     if (result.error) return res.status(result.status).json({ error: result.error });
     if (!result.alreadyWaiting) {
-      const who = student?.name || req.studentNumber;
+      const who = require('../utils/names').properName(student?.name) || req.studentNumber;
       const email = renderEmail({
         heading: `New message from ${who}`,
         intro: `${student?.name || 'A student'} (${req.studentNumber}) sent ${inbox === ADSO ? 'a message' : `the ${officeLabel(inbox)} a message`} on AniSkolar:`,

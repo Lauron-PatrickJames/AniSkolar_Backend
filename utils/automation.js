@@ -94,7 +94,7 @@ async function studentsBy(numbers) {
   const students = await Student.find({ studentNumber: { $in: [...numbers] } }).select('studentNumber name firstName email').lean();
   return new Map(students.map(s => [s.studentNumber, s]));
 }
-const hi = s => `Hi ${s?.firstName || 'there'},`;
+const hi = s => `Hi ${require('./names').properName(s?.firstName) || 'there'},`;
 
 function shuffled(list) {
   const a = [...list];
