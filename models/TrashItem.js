@@ -7,7 +7,8 @@ const mongoose = require('mongoose');
 // kept until it's deleted for good; so is an announcement's Facebook post.
 //
 //   kind      announcement | dutyEvent | attendanceSheet | fseReport |
-//             scholarship | replyTemplate
+//             scholarship | replyTemplate | student (utils/studentDelete.js:
+//             the profile in data, its linked records in extra)
 //   office    whose Trash it's in (an office code; the AdSO sees all)
 //   data      the item as it was (restored as is, same id)
 //   extra     what else the delete changed, to put back on restore
@@ -16,7 +17,7 @@ const mongoose = require('mongoose');
 //   purgeAt   when it's deleted for good
 
 const trashItemSchema = new mongoose.Schema({
-  kind: { type: String, required: true, enum: ['announcement', 'dutyEvent', 'attendanceSheet', 'fseReport', 'scholarship', 'replyTemplate'] },
+  kind: { type: String, required: true, enum: ['announcement', 'dutyEvent', 'attendanceSheet', 'fseReport', 'scholarship', 'replyTemplate', 'student'] },
   title: { type: String, required: true, maxlength: 300 },
   office: { type: String, required: true, index: true },
   data: { type: mongoose.Schema.Types.Mixed, required: true },

@@ -31,8 +31,19 @@ if (!/demo/i.test(DB_NAME || '')) {
   console.error('The demo database name must contain "demo" (this script wipes it).');
   process.exit(1);
 }
-// Sample files never go to the real container.
-process.env.AZURE_STORAGE_CONTAINER = 'aniskolar-demo';
+// Sample files never go to the real container (--container picks another
+// demo one, e.g. for a second demo database).
+const containerArg = process.argv.indexOf('--container');
+const CONTAINER = containerArg > -1 ? process.argv[containerArg + 1] : 'aniskolar-demo';
+if (!/demo/i.test(CONTAINER || '')) {
+  console.error('The demo file container name must contain "demo" (this script empties it).');
+  process.exit(1);
+}
+process.env.AZURE_STORAGE_CONTAINER = CONTAINER;
+// --only <email>: copy just that real account (so it can sign in), shown as
+// a fictional student, e.g. for screenshots with no real person in them.
+const onlyArg = process.argv.indexOf('--only');
+const ONLY = onlyArg > -1 ? String(process.argv[onlyArg + 1] || '').trim().toLowerCase() : '';
 
 const zlib = require('zlib');
 const mongoose = require('mongoose');
@@ -169,14 +180,19 @@ const PEOPLE = [
   ['Camille', 'Torres', 'Ramirez', 'ABComm', '2nd Year', 3.6],
   ['Rico', 'Mendoza', 'Pascual', 'BSEd-Eng', '3rd Year', 2.8],
   ['Ivy', 'Gomez', 'Castro', 'ABComm', '3rd Year', 3.4],
+  // Graduates (June 2026): earlier POLCA and Alumni scholars, in their last
+  // year when they finished. The last value is the year they entered.
+  ['Ramon', 'Dizon', 'Aquino', 'BSA', '4th Year', 3.55, 2022],
+  ['Liza', 'Castro', 'Bautista', 'BSPsych', '4th Year', 3.7, 2022],
+  ['Adrian', 'Velasco', 'Ocampo', 'BSIT', '4th Year', 3.35, 2022],
 ];
 
 // Sign-up today: everything but the telephone is filled in, confirmed.
 const SUFFIX = { 1: 'Jr.', 7: 'II' };
-function makeStudent([first, middle, last, code, yearLevel, gpa], i) {
+function makeStudent([first, middle, last, code, yearLevel, gpa, entered], i) {
   const program = findProgram(code);
   const suffix = SUFFIX[i] || '';
-  const entry = { '1st Year': 2026, '2nd Year': 2025, '3rd Year': 2024, '4th Year': 2023, '5th Year': 2022 }[yearLevel];
+  const entry = entered ?? { '1st Year': 2026, '2nd Year': 2025, '3rd Year': 2024, '4th Year': 2023, '5th Year': 2022 }[yearLevel];
   const studentNumber = `${entry}${String(10100 + i * 7).padStart(5, '0')}`;
   // Reserved .invalid domain: sample students are never really emailed.
   const email = `demo.${first.split(' ')[0].toLowerCase()}.${last.replace(/\s+/g, '').toLowerCase()}@aniskolar-demo.invalid`;
@@ -248,8 +264,16 @@ function history(steps, office = 'LSO') {
   // The real students (same Clerk ids) so their accounts work on the demo data.
   const realDb = process.env.MONGODB_DB && !/demo/i.test(process.env.MONGODB_DB) ? { dbName: process.env.MONGODB_DB } : {};
   const realConn = await mongoose.createConnection(process.env.MONGODB_URI, realDb).asPromise();
-  const realStudents = await realConn.db.collection('students').find().toArray();
-  const realOffices = (await realConn.db.collection('dutysettings').findOne({ _id: 'duty' }))?.officeSlots ?? [];
+  let realStudents = await realConn.db.collection('students').find().toArray();
+  if (ONLY) {
+    realStudents = realStudents.filter(s => (s.email || '').toLowerCase() === ONLY).map(s => ({
+      ...s, studentNumber: '202399001', firstName: 'Juan Miguel', middleName: 'Santos', lastName: 'Dela Cruz', name: 'JUAN MIGUEL SANTOS DELA CRUZ',
+      avatarUrl: undefined, mobileNumber: '09171234567', homeAddress: '12 Mabini St.', fatherName: 'Jose Dela Cruz', motherName: 'Elena Dela Cruz',
+    }));
+    if (!realStudents.length) throw new Error('--only: no student with that email.');
+  }
+  // With --only, no real office heads either (their names would show).
+  const realOffices = ONLY ? [] : (await realConn.db.collection('dutysettings').findOne({ _id: 'duty' }))?.officeSlots ?? [];
   await realConn.close();
 
   await mongoose.connect(process.env.MONGODB_URI, { dbName: DB_NAME });
@@ -365,13 +389,13 @@ function history(steps, office = 'LSO') {
   // Earlier POLCA scholars (no renewals: they keep it until they graduate).
   // CEAT now has 2 (S[3] and S[13]), so it's full: S[7] (CEAT) can't apply.
   await app(S[3], 's3', 'Approved', { created: '2024-06-12T09:00:00+08:00', decided: '2024-07-01T09:00:00+08:00' });
-  await app(S[5], 's3', 'Approved', { created: '2023-06-13T09:00:00+08:00', decided: '2023-07-01T09:00:00+08:00', ended: '2026-06-30T09:00:00+08:00' });
+  await app(S[25], 's3', 'Approved', { created: '2022-06-13T09:00:00+08:00', decided: '2022-07-01T09:00:00+08:00', ended: '2026-06-30T09:00:00+08:00' });
   await app(S[11], 's3', 'Approved', { created: '2025-06-14T09:00:00+08:00', decided: '2025-07-01T09:00:00+08:00' });
   // Earlier Alumni scholars (2 campus-wide, no renewals). With S[7] (above)
-  // and S[12] the 2 slots are full; S[4] and S[1] have graduated.
+  // and S[12] the 2 slots are full; S[26] and S[27] have graduated.
   await app(S[12], 's4', 'Approved', { created: '2025-06-10T09:00:00+08:00', decided: '2025-06-30T09:00:00+08:00' });
-  await app(S[4], 's4', 'Approved', { created: '2022-06-11T09:00:00+08:00', decided: '2022-06-30T09:00:00+08:00', ended: '2026-06-30T09:00:00+08:00' });
-  await app(S[1], 's4', 'Approved', { created: '2022-06-12T09:00:00+08:00', decided: '2022-06-30T09:00:00+08:00', ended: '2026-06-30T09:00:00+08:00' });
+  await app(S[26], 's4', 'Approved', { created: '2022-06-11T09:00:00+08:00', decided: '2022-06-30T09:00:00+08:00', ended: '2026-06-30T09:00:00+08:00' });
+  await app(S[27], 's4', 'Approved', { created: '2022-06-12T09:00:00+08:00', decided: '2022-06-30T09:00:00+08:00', ended: '2026-06-30T09:00:00+08:00' });
 
   // --- Partner offices' scholarships (Nov 2026) ---------------------------------
   const T = (date, time = '09:00') => `${date}T${time}:00+08:00`;
@@ -678,7 +702,7 @@ function history(steps, office = 'LSO') {
   const counts = {};
   for (const c of await db.listCollections().toArray()) counts[c.name] = await db.collection(c.name).countDocuments();
   console.log('Done:', counts);
-  console.log(`Files in ${store.azureEnabled() ? 'Azure container aniskolar-demo' : 'GridFS'}.`);
+  console.log(`Files in ${store.azureEnabled() ? `Azure container ${CONTAINER}` : 'GridFS'}.`);
   await mongoose.disconnect();
   process.exit(0);
 })().catch(async err => {

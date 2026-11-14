@@ -35,6 +35,20 @@ const PESO = (def, max = 500000) => ({ default: def, min: 0, max, step: 1 });
 const RATING = def => ({ default: def, min: 1, max: 5, step: 0.01 });
 
 const OFFICE_FORMS = {
+  // POLCA: every applicant is interviewed before approval. The schedule is
+  // shown to the student (studentInterview); approving needs a passed
+  // interview (routes/applications.js). The grant form has no office step.
+  s3: {
+    interview: true,
+    assessment: {
+      interviewMode: { type: 'choice', options: ['onsite', 'online'] },
+      interviewDate: { type: 'date' },
+      interviewTime: { type: 'time' },
+      // Onsite: the room. Online: the meeting link or instructions.
+      interviewVenue: { type: 'text', max: 500 },
+      interviewResult: { type: 'choice', options: ['passed', 'failed'] },
+    },
+  },
   // Sports Development Office: no application. It adds each player picked
   // from the tryouts (POST /api/applications/direct-award); these are the
   // details it records then, with the coach's document and the SDO
@@ -268,4 +282,14 @@ function parseAssessment(scholarshipId, raw, saved) {
   return { value };
 }
 
-module.exports = { OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment, officeNumbers, parseOfficeNumbers };
+// Scholarships whose applicants are interviewed before approval.
+const requiresInterview = scholarshipId => !!OFFICE_FORMS[scholarshipId]?.interview;
+
+// What the student sees of the office's assessment: their interview
+// schedule, once set (never the result or anything else).
+function studentInterview(scholarshipId, assessment) {
+  if (!requiresInterview(scholarshipId) || !assessment?.interviewDate) return undefined;
+  return { mode: assessment.interviewMode, date: assessment.interviewDate, time: assessment.interviewTime, venue: assessment.interviewVenue };
+}
+
+module.exports = { requiresInterview, studentInterview, OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment, officeNumbers, parseOfficeNumbers };
