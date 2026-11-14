@@ -594,8 +594,17 @@ router.get('/', requireAdso, async (req, res) => {
         .select('studentNumber firstName middleName lastName name email avatarUrl programCode course college yearLevel createdAt')
         .sort({ createdAt: -1 })
         .lean(),
-      Application.aggregate([{ $group: { _id: '$studentNumber', n: { $sum: 1 }, last: { $max: '$createdAt' } } }]),
+      Application.aggregate([{ $group: {
+        _id: '$studentNumber', n: { $sum: 1 }, last: { $max: '$createdAt' },
+        inProgress: { $sum: { $cond: [{ $in: ['$status', ['Under Evaluation', 'Needs Revision']] }, 1, 0] } },
+        current: { $sum: { $cond: [{ $and: [{ $eq: ['$status', 'Approved'] }, { $not: ['$endedAt'] }] }, 1, 0] } },
+        ended: { $sum: { $cond: [{ $and: [{ $eq: ['$status', 'Approved'] }, { $ifNull: ['$endedAt', false] }] }, 1, 0] } },
+        rejected: { $sum: { $cond: [{ $eq: ['$status', 'Rejected'] }, 1, 0] } },
+      } }]),
     ]);
+    // Where the student stands, for the list's filters (deleting checks
+    // the exact rule: utils/studentDelete.js).
+    const outcomeOf = c => (!c ? 'none' : c.inProgress || c.current ? 'active' : c.ended ? 'ended' : c.rejected ? 'rejected' : 'none');
     const byStudent = new Map(counts.map(c => [c._id, c]));
     res.json({
       students: students.map(s => ({
@@ -613,11 +622,36 @@ router.get('/', requireAdso, async (req, res) => {
         joinedAt: s.createdAt ?? null,
         applications: byStudent.get(s.studentNumber)?.n ?? 0,
         lastAppliedAt: byStudent.get(s.studentNumber)?.last ?? null,
+        outcome: outcomeOf(byStudent.get(s.studentNumber)),
       })),
     });
   } catch (err) {
     console.error('Student list error:', err);
     res.status(500).json({ error: 'Failed to load the students.' });
+  }
+});
+
+// POST /api/students/delete  { studentNumbers: [...] } — AdSO only: moves
+// students the office no longer needs (rejected, graduated, stopped) to the
+// Trash with their records, restorable for 30 days. Students with anything
+// active are skipped, with the reason (utils/studentDelete.js).
+router.post('/delete', requireAdso, async (req, res) => {
+  try {
+    const list = Array.isArray(req.body?.studentNumbers) ? [...new Set(req.body.studentNumbers.map(String))] : [];
+    if (!list.length) return res.status(400).json({ error: 'Choose the students to delete.' });
+    if (list.length > 200) return res.status(400).json({ error: 'Delete at most 200 students at a time.' });
+    const { trashStudent } = require('../utils/studentDelete');
+    const deleted = [];
+    const skipped = [];
+    for (const studentNumber of list) {
+      const result = await trashStudent(studentNumber, req.adminUser);
+      if (result.error) skipped.push({ studentNumber, reason: result.error });
+      else deleted.push(studentNumber);
+    }
+    res.json({ deleted, skipped });
+  } catch (err) {
+    console.error('Delete students error:', err);
+    res.status(500).json({ error: 'Failed to delete the students.' });
   }
 });
 
