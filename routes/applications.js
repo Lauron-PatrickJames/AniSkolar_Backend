@@ -1353,6 +1353,64 @@ router.patch('/:id/end', requireAdmin, async (req, res) => {
   }
 });
 
+// POST /api/applications/batch-approve  { ids: [...], reviewNote? } — the
+// Director approves, in one go, the AdSO applications the Head recommended
+// for approval (utils/approvalChain.js). Each one gets the same checks as
+// approving it alone; any that can't be approved now is skipped with the
+// reason. Rejecting stays one at a time (each needs its own message).
+router.post('/batch-approve', requireAdmin, async (req, res) => {
+  try {
+    if (scopedOffice(req.adminUser)) return res.status(403).json({ error: 'Only the AdSO approves in a batch.' });
+    if (!approvalChain.canAct(req.adminUser, 'director')) return res.status(403).json({ error: 'Only the Director gives the final decision.' });
+    const ids = Array.isArray(req.body?.ids) ? [...new Set(req.body.ids.map(String))] : [];
+    if (!ids.length) return res.status(400).json({ error: 'Choose the applications to approve.' });
+    if (ids.length > 300) return res.status(400).json({ error: 'Approve at most 300 applications at a time.' });
+    const note = typeof req.body?.reviewNote === 'string' ? req.body.reviewNote.trim().slice(0, 2000) : '';
+
+    const approved = [];
+    const skipped = [];
+    for (const id of ids) {
+      const skip = reason => skipped.push({ id, reason });
+      let objectId;
+      try { objectId = new ObjectId(id); } catch { skip('Invalid application.'); continue; }
+      const application = await Application.findOne({ _id: objectId, ...officeFilter(req.adminUser) });
+      if (!application) { skip('Not found.'); continue; }
+      const who = application.scholarshipName;
+      if (!approvalChain.inChain(application)) { skip(`${who}: decided by its partner office.`); continue; }
+      if (application.status !== 'Under Evaluation') { skip(`${who}: already ${application.status.toLowerCase()}.`); continue; }
+      if (approvalChain.stageOf(application) !== 'director') { skip(`${who}: not with the Director yet.`); continue; }
+      const rec = [...(application.approvalSteps || [])].reverse().find(st => st.action === 'recommendApproval' || st.action === 'recommendRejection');
+      if (rec?.action !== 'recommendApproval') { skip(`${who}: the Head didn’t recommend approval. Open it to decide.`); continue; }
+      const full = await slotsFull(findScholarship(application.scholarshipId), application.studentNumber);
+      if (full) { skip(`${who}: ${full.message}`); continue; }
+      if (requiresInterview(application.scholarshipId) && application.officeAssessment?.interviewResult !== 'passed') { skip(`${who}: the interview isn’t marked passed.`); continue; }
+      const others = await otherScholarshipsHeld(application.studentNumber, application.scholarshipId, { excludeApplicationId: application._id });
+      if (others.length) { skip(`${who}: the student already holds the ${others.map(o => o.scholarshipName).join(' and the ')}. Open it to approve anyway.`); continue; }
+      if (application.scholarshipId === SFAG_ID && !application.sfagPercentage) {
+        if (!application.sfagPercentageRequested) { skip(`${who}: no grant percentage. Open it to choose one.`); continue; }
+        application.sfagPercentage = application.sfagPercentageRequested;
+        application.sfagPercentageSetBy = req.adminUser.email || req.adminUser.id;
+        application.sfagPercentageSetAt = new Date();
+      }
+      const now = new Date();
+      application.decisionOffice = 'LSO';
+      application.status = 'Approved';
+      application.reviewNote = note || undefined;
+      application.reviewedBy = req.adminUser.email;
+      application.reviewedAt = now;
+      approvalChain.afterDecision(application, req.adminUser, 'Approved', note);
+      if (!Array.isArray(application.history)) application.history = [];
+      application.history.push({ status: 'Approved', note: note || undefined, changedBy: req.adminUser.email, changedByName: req.adminUser.name, changedByOffice: req.adminUser.office, changedAt: now });
+      await application.save();
+      approved.push(id);
+    }
+    res.json({ approved, skipped });
+  } catch (err) {
+    console.error('Batch approve error:', err);
+    res.status(500).json({ error: 'Failed to approve the applications.' });
+  }
+});
+
 // POST /api/applications/:id/approval-step  { action, note } — the AdSO's
 // approval chain for its own scholarships (utils/approvalChain.js): the
 // Associate endorses to the Head; the Head recommends approval or
