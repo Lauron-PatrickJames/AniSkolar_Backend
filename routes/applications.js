@@ -70,6 +70,7 @@ const STUDENT_HIDDEN_FIELDS = '-adminFields -internalNotes -sfagPercentageSetBy'
 const { OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment, requiresInterview, studentInterview } = require('../data/officeForms');
 const { longDate } = require('../utils/scholarshipDates');
 const { semesterEnd } = require('../utils/semester');
+const { numberFieldError, bodySections } = require('../utils/numberFields');
 
 // A standard-form submission's office answers (data/officeForms.js) and
 // the documents they call for, checked before any file is stored.
@@ -459,6 +460,9 @@ router.post('/', requireStudent, (req, res) => {
       }
       const officeStep = !isGrant && formType !== 'sfag' ? checkOfficeStep(scholarship.id, standardInfo, labels) : { value: undefined };
       if (officeStep.error) return res.status(400).json({ error: officeStep.error });
+      // Phone numbers and amounts hold numbers only.
+      const badNumber = numberFieldError({ ...bodySections(req.body), grant: grantSections });
+      if (badNumber) return res.status(400).json({ error: badNumber });
 
       let documents;
       try {
@@ -616,6 +620,8 @@ router.patch('/:id', requireStudent, (req, res) => {
       const onFile = [...existing.documents.map(d => d.docType), ...labels];
       const officeStep = !isGrant && standardInfo ? checkOfficeStep(existing.scholarshipId, standardInfo, onFile) : { value: undefined };
       if (officeStep.error) return res.status(400).json({ error: officeStep.error });
+      const badNumber = numberFieldError({ ...bodySections(req.body), grant: grantSections });
+      if (badNumber) return res.status(400).json({ error: badNumber });
 
       // Upload any newly-selected replacement files into GridFS, same as POST.
       let newDocs = [];
