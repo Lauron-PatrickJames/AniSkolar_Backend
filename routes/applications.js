@@ -66,11 +66,12 @@ function joinNameParts(partsExpr) {
 // Office-use data that applicants never see.
 // (The office assessment is read, then reduced to the interview schedule by
 // toStudentView.)
-const STUDENT_HIDDEN_FIELDS = '-adminFields -internalNotes -sfagPercentageSetBy';
+const STUDENT_HIDDEN_FIELDS = '-adminFields -internalNotes -sfagPercentageSetBy -approvalSteps -approvalStage';
 const { OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment, requiresInterview, studentInterview } = require('../data/officeForms');
 const { longDate } = require('../utils/scholarshipDates');
 const { semesterEnd } = require('../utils/semester');
 const { numberFieldError, bodySections } = require('../utils/numberFields');
+const approvalChain = require('../utils/approvalChain');
 
 // A standard-form submission's office answers (data/officeForms.js) and
 // the documents they call for, checked before any file is stored.
@@ -136,6 +137,8 @@ function toStudentView(application) {
   delete obj.officeAssessment;
   delete obj.internalNotes;
   delete obj.sfagPercentageSetBy;
+  delete obj.approvalSteps;
+  delete obj.approvalStage;
   if (interview) obj.interview = interview;
   return obj;
 }
@@ -667,6 +670,8 @@ router.patch('/:id', requireStudent, (req, res) => {
       if (names.personalInfo) { existing.personalInfo = names.personalInfo; existing.markModified('personalInfo'); }
 
       existing.status = 'Under Evaluation';
+      // A resubmission starts the AdSO's approval chain over.
+      if (approvalChain.inChain(existing)) existing.approvalStage = 'associate';
       // Deliberately NOT clearing reviewNote/reviewedBy/reviewedAt here.
       // The whole point of "Needs Revision" is the student sees what was
       // flagged and fixes it — wiping the note the instant they resubmit
@@ -1115,6 +1120,11 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
       }
     }
 
+    // The AdSO's own scholarships: the Director gives the final decision,
+    // after the Associate and the Head (utils/approvalChain.js).
+    const chainBlock = approvalChain.decisionBlock(application, req.adminUser, status, office);
+    if (chainBlock) return res.status(chainBlock.status).json({ error: chainBlock.error, code: chainBlock.code });
+
     // Fixed number of scholars (POLCA per college, Alumni in all): no
     // approving while full.
     if (status === 'Approved') {
@@ -1181,6 +1191,7 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
     application.reviewedBy = req.adminUser.email;
     application.reviewedAt = new Date();
 
+    if (!office) approvalChain.afterDecision(application, req.adminUser, status, reviewNote);
     if (!Array.isArray(application.history)) application.history = [];
     application.history.push({
       status,
@@ -1339,6 +1350,28 @@ router.patch('/:id/end', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('End scholarship error:', err);
     res.status(500).json({ error: 'Failed to save.' });
+  }
+});
+
+// POST /api/applications/:id/approval-step  { action, note } — the AdSO's
+// approval chain for its own scholarships (utils/approvalChain.js): the
+// Associate endorses to the Head; the Head recommends approval or
+// rejection to the Director, or returns it to the Associate; the Director
+// returns it to the Head (the final decision is PATCH /:id/status).
+router.post('/:id/approval-step', requireAdmin, async (req, res) => {
+  try {
+    if (scopedOffice(req.adminUser)) return res.status(403).json({ error: 'Only the AdSO uses the approval chain.' });
+    let objectId;
+    try { objectId = new ObjectId(req.params.id); } catch { return res.status(400).json({ error: 'Invalid application id.' }); }
+    const application = await Application.findOne({ _id: objectId, ...officeFilter(req.adminUser) });
+    if (!application) return res.status(404).json({ error: 'Application not found.' });
+    const result = approvalChain.takeStep(application, String(req.body?.action || ''), req.adminUser, req.body?.note);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    await application.save();
+    res.json({ application });
+  } catch (err) {
+    console.error('Approval step error:', err);
+    res.status(500).json({ error: 'Failed to save the step.' });
   }
 });
 
