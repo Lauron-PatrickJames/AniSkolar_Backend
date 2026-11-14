@@ -147,6 +147,21 @@ const applicationSchema = new mongoose.Schema({
     enum: ['Under Evaluation', 'Approved', 'Rejected', 'Needs Revision'],
     default: 'Under Evaluation',
   },
+  // The AdSO's approval chain for its own scholarships (utils/approvalChain.js):
+  // the step it's at, and each step taken. Staff only, never shown to the
+  // student.
+  approvalStage: { type: String, enum: ['associate', 'head', 'director'] },
+  approvalSteps: [{
+    _id: false,
+    action: String,     // endorse, recommendApproval, recommendRejection, returnToAssociate, returnToHead, approve, reject, revision
+    fromStage: String,
+    toStage: String,
+    note: String,
+    by: String,
+    byName: String,
+    role: String,
+    at: Date,
+  }],
   // Set by the admin-only PATCH /api/applications/:id/status route.
   reviewNote: String,
   reviewedBy: String,   // admin's email, from Clerk (see requireAdmin)

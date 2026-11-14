@@ -48,7 +48,10 @@ async function requireAdmin(req, res, next) {
 
     // Display name for history entries ("POLCA Office · Maria Santos").
     const name = [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || undefined;
-    req.adminUser = { id: userId, email: user.emailAddresses?.[0]?.emailAddress, name, office };
+    // The AdSO's approval chain role (utils/approvalChain.js), when set.
+    const role = user.publicMetadata?.adsoRole;
+    const adsoRole = ['associate', 'head', 'director'].includes(role) ? role : null;
+    req.adminUser = { id: userId, email: user.emailAddresses?.[0]?.emailAddress, name, office, adsoRole };
     next();
   } catch (err) {
     console.error('requireAdmin check failed:', err);
