@@ -39,7 +39,10 @@ async function moveToTrash({ kind, doc, title, office, files = [], extra, by }) 
 // Puts an item back where it was. { error, status } when it can't be.
 async function restore(item) {
   const data = { ...item.data };
-  if (item.kind === 'attendanceSheet') {
+  if (item.kind === 'student') {
+    const result = await require('./studentDelete').restoreStudent(item);
+    if (result.error) return result;
+  } else if (item.kind === 'attendanceSheet') {
     const DutyEvent = require('../models/DutyEvent');
     const event = await DutyEvent.findById(item.extra?.eventId);
     if (!event) return { error: 'Its event is gone. Restore the event first.', status: 409 };

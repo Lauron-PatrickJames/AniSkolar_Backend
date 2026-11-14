@@ -64,8 +64,11 @@ function joinNameParts(partsExpr) {
 }
 
 // Office-use data that applicants never see.
-const STUDENT_HIDDEN_FIELDS = '-adminFields -officeAssessment -internalNotes -sfagPercentageSetBy';
-const { OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment } = require('../data/officeForms');
+// (The office assessment is read, then reduced to the interview schedule by
+// toStudentView.)
+const STUDENT_HIDDEN_FIELDS = '-adminFields -internalNotes -sfagPercentageSetBy';
+const { OFFICE_FORMS, parseOfficeAnswers, officeDocuments, parseAssessment, requiresInterview, studentInterview } = require('../data/officeForms');
+const { longDate } = require('../utils/scholarshipDates');
 const { semesterEnd } = require('../utils/semester');
 
 // A standard-form submission's office answers (data/officeForms.js) and
@@ -127,10 +130,52 @@ async function stampStudentNames(studentNumber, application) {
 
 function toStudentView(application) {
   const obj = application.toObject ? application.toObject() : { ...application };
+  const interview = studentInterview(obj.scholarshipId, obj.officeAssessment);
   delete obj.adminFields;
   delete obj.officeAssessment;
   delete obj.internalNotes;
+  delete obj.sfagPercentageSetBy;
+  if (interview) obj.interview = interview;
   return obj;
+}
+
+// "2:30 PM" from "14:30".
+function to12h(time) {
+  const [h, m] = String(time).split(':').map(Number);
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+// Emails the applicant their interview schedule (and again when it
+// changes). Never throws.
+async function emailInterview(application, interview, rescheduled) {
+  try {
+    const student = await Student.findOne({ studentNumber: application.studentNumber }).select('firstName email').lean();
+    if (!student?.email) return;
+    const when = `${longDate(interview.date)}${interview.time ? `, ${to12h(interview.time)}` : ''}`;
+    const kind = interview.mode === 'online' ? 'online interview' : interview.mode === 'onsite' ? 'onsite interview' : 'interview';
+    const where = interview.venue ? (interview.mode === 'online' ? ` (${interview.venue})` : ` at ${interview.venue}`) : '';
+    const appUrl = process.env.APP_URL || (process.env.FRONTEND_ORIGINS || '').split(',')[0].trim() || 'http://localhost:3000';
+    const office = require('../data/offices').OFFICE_NAMES[application.office] ?? 'the scholarship office';
+    const { html, text } = renderEmail({
+      heading: rescheduled ? `Your ${kind} was rescheduled` : `You’re invited to an ${kind}`,
+      intro: `${application.scholarshipName}: ${when}${interview.venue ? `, ${interview.venue}` : ''}.`,
+      body: [
+        `Hi ${require('../utils/names').properName(student.firstName) || 'there'},`,
+        '',
+        `${rescheduled ? `Your ${kind} for the` : 'Your application for the'} ${application.scholarshipName} ${rescheduled ? `has moved to ${when}` : `is moving forward. The ${office.replace(/^the /i, '')} would like to interview you ${interview.mode === 'online' ? 'online' : interview.mode === 'onsite' ? 'in person' : ''} on ${when}`.replace('  ', ' ')}${where}.`,
+        '',
+        interview.mode === 'online'
+          ? 'Please join on time, from a quiet place with a working camera and microphone. If you can’t make it, message the office in AniSkolar as soon as possible.'
+          : 'Please come on time. If you can’t make it, message the office in AniSkolar as soon as possible.',
+      ].join('\n'),
+      button: { url: appUrl, label: 'View my application' },
+    });
+    const key = `interview:${application._id}:${interview.mode || ''}:${interview.date}:${interview.time || ''}:${interview.venue || ''}`;
+    const n = await queueEmails([{ key, kind: 'interview', priority: 1, to: student.email, subject: `AniSkolar: ${rescheduled ? 'interview rescheduled' : 'interview schedule'}, ${application.scholarshipName}`, html, text }]);
+    if (n) processOutbox().catch(() => {});
+  } catch (err) {
+    console.error('Interview email failed:', err);
+  }
 }
 
 // Validates a grant-form (POLCA / Alumni) submission before anything is
@@ -659,7 +704,7 @@ router.get('/student/:studentNumber', requireStudentOrAdmin, async (req, res) =>
     const applications = await Application.find({ studentNumber: req.params.studentNumber, ...scope })
       .select(STUDENT_HIDDEN_FIELDS)
       .sort({ createdAt: -1 });
-    res.json({ applications });
+    res.json({ applications: applications.map(toStudentView) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch applications.' });
   }
@@ -926,7 +971,7 @@ router.get('/:id', requireStudentOrAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Application not found.' });
     }
 
-    res.json({ application });
+    res.json({ application: toStudentView(application) });
   } catch (err) {
     console.error('Fetch single application error:', err);
     res.status(500).json({ error: 'Failed to fetch application.' });
@@ -1075,6 +1120,17 @@ router.patch('/:id/status', requireAdmin, async (req, res) => {
           error: `${full.message} Current scholars: ${full.holders.map(h => h.name || h.studentNumber).join(', ')}. Mark one as graduated or stopped first if a slot has opened.`,
         });
       }
+    }
+
+    // POLCA interviews every applicant first: approving needs the interview
+    // marked passed (Assessment card).
+    if (status === 'Approved' && requiresInterview(application.scholarshipId) && application.officeAssessment?.interviewResult !== 'passed') {
+      return res.status(409).json({
+        code: 'interview_required',
+        error: application.officeAssessment?.interviewResult === 'failed'
+          ? 'This applicant didn’t pass the interview, so they can’t be approved.'
+          : 'Interview the applicant first: mark the interview as passed in the Interview card, then approve.',
+      });
     }
 
     // Only one internally funded scholarship can be held. Approving another
@@ -1295,9 +1351,17 @@ router.patch('/:id/office-assessment', requireAdmin, async (req, res) => {
     const numbersSaved = (await ScholarshipSetting.findOne({ scholarshipId: application.scholarshipId }).select('officeNumbers').lean())?.officeNumbers;
     const parsed = parseAssessment(application.scholarshipId, req.body?.assessment, numbersSaved);
     if (parsed.error) return res.status(400).json({ error: parsed.error });
+    const before = studentInterview(application.scholarshipId, application.officeAssessment);
     application.officeAssessment = { ...parsed.value, updatedBy: req.adminUser.email || req.adminUser.id, updatedAt: new Date() };
     application.markModified('officeAssessment');
     await application.save();
+    // A new or changed interview schedule is emailed to the applicant
+    // (only while the application is still being decided).
+    const after = studentInterview(application.scholarshipId, application.officeAssessment);
+    const same = (a, b) => a?.mode === b?.mode && a?.date === b?.date && a?.time === b?.time && a?.venue === b?.venue;
+    if (after && !same(before, after) && !['Approved', 'Rejected'].includes(application.status)) {
+      emailInterview(application, after, !!before);
+    }
     res.json({ officeAssessment: application.officeAssessment });
   } catch (err) {
     console.error('Office assessment error:', err);
