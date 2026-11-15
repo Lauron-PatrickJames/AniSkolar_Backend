@@ -343,6 +343,21 @@ router.get('/admin/periods', requireAdmin, async (req, res) => {
   }
 });
 
+// Every renewal the admin's office can see, without documents or history:
+// the Scholars page's lifecycle report (which terms each scholar held).
+router.get('/admin/all', requireAdmin, async (req, res) => {
+  try {
+    const renewals = await Renewal.find({})
+      .select('studentNumber scholarshipId scholarshipName office academicYear term continuing notContinuingReason status gpa reviewedAt createdAt')
+      .sort({ academicYear: 1, term: 1 })
+      .lean();
+    res.json({ renewals: renewals.filter(r => canSeeScholarship(req.adminUser, r.scholarshipId)) });
+  } catch (err) {
+    console.error('Load all renewals error:', err);
+    res.status(500).json({ error: 'Failed to load renewals.' });
+  }
+});
+
 router.post('/admin/periods', requireAdmin, async (req, res) => {
   try {
     const { period, error } = parsePeriodBody(req.body || {}, { partial: false });
