@@ -215,12 +215,19 @@ function validateGrantSubmission(scholarship, body, presentSlotKeys) {
 // their school email: applications belong to the student number, so the
 // scholarship is theirs the first time they sign in. Either way they're
 // emailed.
+//
+// Every other office can add a scholar the same way to its own scholarships
+// (someone awarded outside AniSkolar, e.g. on a paper application): no
+// office form, just a required note on why (`note`), the approval
+// confirmation, an optional supporting document, and for the SFAG the
+// grant percentage (`sfagPercentage`).
 // GET /api/applications/direct-award/students?q= — students to pick from.
 const directAwardScholarship = (adminUser, scholarshipId) => {
   const scholarship = findScholarship(scholarshipId);
-  if (!scholarship?.directAward) return null;
+  if (!scholarship) return null;
   return (scopedOffice(adminUser) ?? 'LSO') === scholarship.office ? scholarship : null;
 };
+const SFAG_PERCENTAGES = [100, 75, 50, 25];
 
 router.get('/direct-award/students', requireAdmin, async (req, res) => {
   try {
@@ -242,8 +249,11 @@ router.post('/direct-award', requireAdmin, (req, res) => {
     try {
       const scholarship = directAwardScholarship(req.adminUser, req.body.scholarshipId);
       if (!scholarship) return res.status(403).json({ error: 'Only the office that handles this scholarship can add its scholars.' });
+      // Scholarships without an application have the office's own form;
+      // the rest are added with a note.
+      const withForm = !!scholarship.directAward;
       // Who the office adds ('player', 'officer'), who approves, and the note.
-      const award = OFFICE_FORMS[scholarship.id]?.award ?? { who: 'scholar', approver: 'office head', note: 'Added by the office.' };
+      const award = (withForm && OFFICE_FORMS[scholarship.id]?.award) || { who: 'scholar', approver: 'office head', note: 'Added by the office.' };
       const studentNumber = typeof req.body.studentNumber === 'string' ? req.body.studentNumber.trim() : '';
       if (!/^\d{9}$/.test(studentNumber)) return res.status(400).json({ error: 'Enter the 9-digit student number.' });
       let student = await Student.findOne({ studentNumber }).lean();
@@ -259,20 +269,36 @@ router.post('/direct-award', requireAdmin, (req, res) => {
       }
       if (req.body.directorApproved !== 'true') return res.status(400).json({ error: `Confirm the ${award.approver} approved it.` });
 
-      let rawAnswers; let rawAssessment;
-      try {
-        rawAnswers = JSON.parse(req.body.officeAnswers || '{}');
-        rawAssessment = JSON.parse(req.body.assessment || '{}');
-      } catch { return res.status(400).json({ error: 'Invalid form data.' }); }
-      const answers = parseOfficeAnswers(scholarship.id, rawAnswers);
-      if (answers.error) return res.status(400).json({ error: `Fill in the ${award.who}’s details.` });
-      const numbersSaved = (await ScholarshipSetting.findOne({ scholarshipId: scholarship.id }).select('officeNumbers').lean())?.officeNumbers;
-      const assessment = parseAssessment(scholarship.id, rawAssessment, numbersSaved);
-      if (assessment.error) return res.status(400).json({ error: assessment.error });
-      const now = new Date();
-      const [docLabel] = officeDocuments(scholarship.id, answers.value) ?? [];
+      const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 2000) : '';
       const files = req.files || [];
-      if (files.length !== 1) return res.status(400).json({ error: `Attach the ${docLabel ?? 'document'} (one JPG).` });
+      let answers = { value: undefined };
+      let assessment = null;
+      let docLabel;
+      let sfagPercentage;
+      if (withForm) {
+        let rawAnswers; let rawAssessment;
+        try {
+          rawAnswers = JSON.parse(req.body.officeAnswers || '{}');
+          rawAssessment = JSON.parse(req.body.assessment || '{}');
+        } catch { return res.status(400).json({ error: 'Invalid form data.' }); }
+        answers = parseOfficeAnswers(scholarship.id, rawAnswers);
+        if (answers.error) return res.status(400).json({ error: `Fill in the ${award.who}’s details.` });
+        const numbersSaved = (await ScholarshipSetting.findOne({ scholarshipId: scholarship.id }).select('officeNumbers').lean())?.officeNumbers;
+        const parsed = parseAssessment(scholarship.id, rawAssessment, numbersSaved);
+        if (parsed.error) return res.status(400).json({ error: parsed.error });
+        assessment = parsed.value;
+        [docLabel] = officeDocuments(scholarship.id, answers.value) ?? [];
+        if (files.length !== 1) return res.status(400).json({ error: `Attach the ${docLabel ?? 'document'} (one JPG).` });
+      } else {
+        if (note.length < 5) return res.status(400).json({ error: 'Say why they’re being added, e.g. “Approved on a paper application.”' });
+        if (files.length > 1) return res.status(400).json({ error: 'Attach one supporting document at most.' });
+        docLabel = 'Supporting document';
+        if (scholarship.formType === 'sfag') {
+          sfagPercentage = Number(req.body.sfagPercentage);
+          if (!SFAG_PERCENTAGES.includes(sfagPercentage)) return res.status(400).json({ error: 'Choose the grant percentage.' });
+        }
+      }
+      const now = new Date();
 
       // Already a current scholar. A one-semester grant (ROTC) only counts
       // for its own semester: next semester the office adds them again.
@@ -289,9 +315,8 @@ router.post('/direct-award', requireAdmin, (req, res) => {
         }
       }
 
-      const documents = await storeFilesInGridFS(files, [docLabel]);
+      const documents = files.length ? await storeFilesInGridFS(files, [docLabel]) : [];
       const by = req.adminUser.email;
-      const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 2000) : '';
       const application = await Application.create({
         studentNumber,
         scholarshipId: scholarship.id,
@@ -306,7 +331,8 @@ router.post('/direct-award', requireAdmin, (req, res) => {
           program: student.programCode || '', yearLevel: student.yearLevel || '',
           officeAnswers: answers.value,
         },
-        officeAssessment: { ...assessment.value, directorApproved: true, updatedBy: by, updatedAt: now },
+        ...(assessment ? { officeAssessment: { ...assessment, directorApproved: true, updatedBy: by, updatedAt: now } } : {}),
+        ...(sfagPercentage ? { sfagPercentage } : {}),
         awardedDirectly: true,
         status: 'Approved',
         decisionOffice: scholarship.office,
