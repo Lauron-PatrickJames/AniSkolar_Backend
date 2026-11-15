@@ -222,7 +222,14 @@ function validateGrantSubmission(scholarship, body, presentSlotKeys) {
 // confirmation, an optional supporting document, and for the SFAG the
 // grant percentage (`sfagPercentage`).
 // GET /api/applications/direct-award/students?q= — students to pick from.
+// Who can add scholars: the SDO and the ROTC Office (their scholarships
+// have no application), and the AdSO's Scholarship Associate, Head and
+// Director (publicMetadata.adsoRole in Clerk). No other office.
+const canAddScholars = adminUser =>
+  ['SDO', 'ROTC'].includes(adminUser?.office) || (adminUser?.office === 'LSO' && !!adminUser.adsoRole);
+const ADD_SCHOLAR_DENIED = 'Only the AdSO’s Scholarship Associate, Head and Director, the SDO and the ROTC Office can add scholars.';
 const directAwardScholarship = (adminUser, scholarshipId) => {
+  if (!canAddScholars(adminUser)) return null;
   const scholarship = findScholarship(scholarshipId);
   if (!scholarship) return null;
   return (scopedOffice(adminUser) ?? 'LSO') === scholarship.office ? scholarship : null;
@@ -230,6 +237,7 @@ const directAwardScholarship = (adminUser, scholarshipId) => {
 const SFAG_PERCENTAGES = [100, 75, 50, 25];
 
 router.get('/direct-award/students', requireAdmin, async (req, res) => {
+  if (!canAddScholars(req.adminUser)) return res.status(403).json({ error: ADD_SCHOLAR_DENIED });
   try {
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     if (q.length < 2) return res.json({ students: [] });
@@ -247,6 +255,7 @@ router.post('/direct-award', requireAdmin, (req, res) => {
   uploadDocs(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'The file must be under 10MB.' : err.message });
     try {
+      if (!canAddScholars(req.adminUser)) return res.status(403).json({ error: ADD_SCHOLAR_DENIED });
       const scholarship = directAwardScholarship(req.adminUser, req.body.scholarshipId);
       if (!scholarship) return res.status(403).json({ error: 'Only the office that handles this scholarship can add its scholars.' });
       // Scholarships without an application have the office's own form;
