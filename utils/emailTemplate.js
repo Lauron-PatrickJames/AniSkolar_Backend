@@ -32,7 +32,9 @@ function bodyHtml(text) {
   const flushList = () => { if (list.length) blocks.push(`<ul style="margin:0 0 12px;padding-left:22px">${list.map(l => `<li style="margin:0 0 4px">${inline(l)}</li>`).join('')}</ul>`); list = []; };
   for (const raw of String(text || '').split(/\r?\n/)) {
     const line = raw.trimEnd();
-    const bullet = line.match(/^\s*[-•*]\s+(.*)$/);
+    // The text after the marker starts with a non-space, so the spaces and
+    // the text can't overlap (no slow backtracking on long lines).
+    const bullet = line.match(/^\s*[-•*]\s+(\S.*)$/);
     if (bullet) { flushPara(); list.push(bullet[1]); continue; }
     flushList();
     if (!line.trim()) { flushPara(); continue; }

@@ -435,7 +435,7 @@ router.post('/', requireStudent, (req, res) => {
 
       // Closed by its office, outside its application period, or (SFAG)
       // outside June–July: the same rule the portal shows (applyBlock).
-      const setting = await ScholarshipSetting.findOne({ scholarshipId }).select('status opensOn closesOn rules').lean();
+      const setting = await ScholarshipSetting.findOne({ scholarshipId: scholarship.id }).select('status opensOn closesOn rules').lean();
       const blocked = applyBlock(scholarship, setting);
       if (blocked) return res.status(400).json({ error: blocked });
 
@@ -550,7 +550,7 @@ router.post('/', requireStudent, (req, res) => {
 
       // The saved-for-later draft (routes/applicationDrafts.js) has done its
       // job once the real application exists.
-      await ApplicationDraft.deleteOne({ studentNumber, scholarshipId }).catch(() => {});
+      await ApplicationDraft.deleteOne({ studentNumber, scholarshipId: scholarship.id }).catch(() => {});
 
       res.status(201).json({
         message: 'Application submitted successfully.',

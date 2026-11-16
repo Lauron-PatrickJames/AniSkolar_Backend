@@ -67,7 +67,7 @@ router.post('/:job/:action', requireAdso, async (req, res) => {
 
 router.get('/outbox', requireAdso, async (req, res) => {
   try {
-    const status = OutboxEmail.STATUSES.includes(req.query.status) ? req.query.status : 'failed';
+    const status = OutboxEmail.STATUSES.find(s => s === req.query.status) ?? 'failed';
     const emails = await OutboxEmail.find({ status }).select('kind to subject status attempts error createdAt sentAt').sort({ updatedAt: -1 }).limit(100).lean();
     res.json({ emails });
   } catch (err) {

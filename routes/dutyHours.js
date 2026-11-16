@@ -75,8 +75,10 @@ function parseTerm(source) {
   if (source.academicYear === undefined && source.term === undefined) return { value: currentTerm() };
   const academicYear = Number(source.academicYear);
   if (!Number.isInteger(academicYear) || academicYear < 2000 || academicYear > 2100) return { error: 'Choose the academic year.' };
-  if (!TERMS.includes(source.term)) return { error: 'Choose the term.' };
-  return { value: { academicYear, term: source.term } };
+  // The term from the fixed list, not the request's value.
+  const term = TERMS.find(t => t === source.term);
+  if (!term) return { error: 'Choose the term.' };
+  return { value: { academicYear, term } };
 }
 
 // Required hours follow the scholar's grant percentage and year level

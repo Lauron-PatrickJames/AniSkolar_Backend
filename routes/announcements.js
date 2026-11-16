@@ -372,9 +372,8 @@ function requestApproval(req, doc, wanted) {
 router.get('/', requireAdmin, async (req, res) => {
   try {
     const filter = ownedFilter(req);
-    if (Announcement.STATUSES.includes(req.query.status)) {
-      filter.status = req.query.status;
-    }
+    const status = Announcement.STATUSES.find(s => s === req.query.status);
+    if (status) filter.status = status;
     const docs = await Announcement.find(filter).sort({ isPinned: -1, createdAt: -1 });
     res.json({ announcements: docs.map(d => d.toClientShape()) });
   } catch (err) {

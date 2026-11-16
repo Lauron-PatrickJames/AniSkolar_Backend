@@ -294,8 +294,10 @@ function parsePeriodBody(body, { partial }) {
     out.academicYear = year;
   }
   if (!partial || body.term !== undefined) {
-    if (!TERMS.includes(body.term)) return { error: 'Choose the term.' };
-    out.term = body.term;
+    // The term from the fixed list, not the request's value.
+    const term = TERMS.find(t => t === body.term);
+    if (!term) return { error: 'Choose the term.' };
+    out.term = term;
   }
   if (body.open !== undefined) out.open = body.open === true;
   if (body.deadline !== undefined) {
