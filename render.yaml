@@ -48,6 +48,9 @@ services:
         sync: false
       - key: FB_GRAPH_VERSION
         sync: false
+      # Sentry error reporting (aniskolar-backend project's DSN).
+      - key: SENTRY_DSN
+        sync: false
       # The frontend's address (Vercel), e.g. https://aniskolar.vercel.app —
       # no slash at the end. Fill in once the frontend is deployed.
       - key: FRONTEND_ORIGINS

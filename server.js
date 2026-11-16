@@ -4,6 +4,9 @@ dns.setServers(['8.8.8.8', '1.1.1.1']);
 
 require('dotenv').config();
 
+// Error reporting (instrument.js); must load before Express.
+const Sentry = require('./instrument');
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -99,6 +102,16 @@ app.use('/api/admin/announcements', announcementRoutes);
 // Health check
 app.get('/', (req, res) => {
   res.json({ status: 'AniSkolar API is running' });
+});
+
+// Unhandled errors: reported to Sentry (when SENTRY_DSN is set), then
+// answered as JSON like every other error, without details.
+if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const status = Number(err.status || err.statusCode) || 500;
+  if (status >= 500) console.error('Unhandled error:', err);
+  res.status(status).json({ error: status >= 500 ? 'Something went wrong. Please try again.' : err.message || 'Bad request.' });
 });
 
 const PORT = process.env.PORT || 5000;
