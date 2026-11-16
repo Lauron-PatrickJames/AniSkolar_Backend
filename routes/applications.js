@@ -279,7 +279,7 @@ router.post('/direct-award', requireAdmin, (req, res) => {
       if (req.body.directorApproved !== 'true') return res.status(400).json({ error: `Confirm the ${award.approver} approved it.` });
 
       const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 2000) : '';
-      const files = req.files || [];
+      const files = Array.isArray(req.files) ? req.files : [];
       let answers = { value: undefined };
       let assessment = null;
       let docLabel;
@@ -460,7 +460,9 @@ router.post('/', requireStudent, (req, res) => {
       // internally funded scholarship can be held, and the student chooses
       // if two are approved (see the approval check and utils/exclusivity.js).
 
-      if (!req.files || req.files.length === 0) {
+      // Only a list of uploads counts (a crafted request can't pass an object).
+      const uploaded = Array.isArray(req.files) ? req.files : [];
+      if (uploaded.length === 0) {
         return res.status(400).json({ error: 'Please upload all required documents.' });
       }
 
@@ -471,7 +473,7 @@ router.post('/', requireStudent, (req, res) => {
         return res.status(400).json({ error: 'Invalid document labels format.' });
       }
 
-      if (labels.length !== req.files.length) {
+      if (labels.length !== uploaded.length) {
         return res.status(400).json({ error: 'Document count does not match label count.' });
       }
 
@@ -483,7 +485,7 @@ router.post('/', requireStudent, (req, res) => {
       let meta = [];
       let grantSections;
       if (isGrant) {
-        const parsedMeta = parseDocumentMeta(documentMeta, req.files.length);
+        const parsedMeta = parseDocumentMeta(documentMeta, uploaded.length);
         if (parsedMeta.error) return res.status(400).json({ error: parsedMeta.error });
         meta = parsedMeta.meta;
         const presentSlotKeys = new Set(meta.map(m => m.slotKey).filter(Boolean));
@@ -504,7 +506,7 @@ router.post('/', requireStudent, (req, res) => {
 
       let documents;
       try {
-        documents = await storeFilesInGridFS(req.files, labels, meta);
+        documents = await storeFilesInGridFS(uploaded, labels, meta);
       } catch (uploadErr) {
         console.error('GridFS upload failed:', uploadErr);
         return res.status(500).json({ error: 'Failed to store uploaded documents. Please try again.' });
@@ -623,7 +625,7 @@ router.patch('/:id', requireStudent, (req, res) => {
         return res.status(400).json({ error: 'Invalid document labels format.' });
       }
 
-      const files = req.files || [];
+      const files = Array.isArray(req.files) ? req.files : [];
       if (labels.length !== files.length) {
         return res.status(400).json({ error: 'Document count does not match label count.' });
       }

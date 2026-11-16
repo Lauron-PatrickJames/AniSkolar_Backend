@@ -227,7 +227,7 @@ router.post('/', requireScholar, withUploads(async (req, res) => {
       if (wait) return res.status(409).json({ code: 'evaluation_pending', error: wait.message });
     }
 
-    const files = req.files || [];
+    const files = Array.isArray(req.files) ? req.files : [];
     const parsed = parseSubmission(req.body, files, period);
     if (parsed.error) return res.status(400).json({ error: parsed.error });
 
@@ -654,7 +654,7 @@ router.patch('/:id', requireScholar, withUploads(async (req, res) => {
     const period = await RenewalPeriod.findById(renewal.periodId);
     if (!period) return res.status(404).json({ error: 'Renewal period not found.' });
 
-    const files = req.files || [];
+    const files = Array.isArray(req.files) ? req.files : [];
     const kept = new Set(renewal.documents.map(d => d.docType));
     const parsed = parseSubmission(req.body, files, period, kept);
     if (parsed.error) return res.status(400).json({ error: parsed.error });

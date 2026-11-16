@@ -459,7 +459,7 @@ router.post('/', requireAdmin, withImageUpload, async (req, res) => {
     const willPublish = status === 'published';
     const schedule = status === 'scheduled' ? parseScheduledFor(req.body.scheduledFor) : { value: null };
     if (schedule.error) return res.status(400).json({ error: schedule.error });
-    await storeImages(req.files, newImages);
+    await storeImages(Array.isArray(req.files) ? req.files : [], newImages);
 
     const doc = new Announcement({
       title,
@@ -655,14 +655,14 @@ router.patch('/:id', requireAdmin, withImageUpload, async (req, res) => {
     const keep = parseKeepImageIds(req.body.keepImageIds);
     if (keep.error) return res.status(400).json({ error: keep.error });
     const oldImages = existing.images.map(img => img.toObject());
-    if (keep.value !== undefined || req.files?.length) {
+    if (keep.value !== undefined || (Array.isArray(req.files) && req.files.length)) {
       const kept = keep.value === undefined
         ? oldImages
         : keep.value.map(id => oldImages.find(img => String(img.fileId) === id)).filter(Boolean);
-      if (kept.length + (req.files?.length || 0) > Announcement.MAX_IMAGES) {
+      if (kept.length + (Array.isArray(req.files) ? req.files.length : 0) > Announcement.MAX_IMAGES) {
         return res.status(400).json({ error: `An announcement can have up to ${Announcement.MAX_IMAGES} images.` });
       }
-      await storeImages(req.files, newImages);
+      await storeImages(Array.isArray(req.files) ? req.files : [], newImages);
       existing.images = [...kept, ...newImages];
     }
 
