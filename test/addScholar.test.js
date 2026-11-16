@@ -22,7 +22,7 @@ beforeEach(() => {
   users.head = clerkUser('adsohead@dlsud.edu.ph', { metadata: { role: 'admin', office: 'ADSO', adsoRole: 'head' } });
   users.director = clerkUser('adsodirector@dlsud.edu.ph', { metadata: { role: 'admin', office: 'ADSO', adsoRole: 'director' } });
   users.adso = adsoAdmin();
-  Student.findOne = () => query({ studentNumber: '202312345', firstName: 'Juan', lastName: 'Dela Cruz', name: 'JUAN DELA CRUZ', email: 'jdc@dlsud.edu.ph', programCode: 'BSIT' });
+  Student.findOne = () => query({ studentNumber: '202399001', firstName: 'Juan', lastName: 'Dela Cruz', name: 'JUAN DELA CRUZ', email: 'jdc@dlsud.edu.ph', programCode: 'BSIT' });
   Application.find = () => query([]);
   Renewal.find = () => query([]);
   ScholarshipSetting.findOne = () => query(null);
@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 
 const add = (user, body) => call(a, 'POST', '/api/applications/direct-award', {
-  user, body: { studentNumber: '202312345', directorApproved: 'true', ...body },
+  user, body: { studentNumber: '202399001', directorApproved: 'true', ...body },
 });
 
 test('the Scholarship Associate adds a scholar with a note', async () => {
