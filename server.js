@@ -130,6 +130,9 @@ mongoose.connect(process.env.MONGODB_URI, process.env.MONGODB_DB ? { dbName: pro
     setTimeout(expireDuties, 60_000);
     setInterval(expireDuties, 15 * 60_000);
     setInterval(() => processOutbox().catch(err => console.error('Sending queued emails failed:', err)), 60_000);
+    // FSE reports are generated on demand now: drop the old one-per-term
+    // unique index (and create the current ones).
+    require('./models/FseReport').syncIndexes().catch(err => console.error('FSE index sync failed:', err.message));
     // Trash: items older than 30 days are deleted for good, every hour.
     const { purgeExpired } = require('./utils/trash');
     const emptyTrash = () => purgeExpired().catch(err => console.error('Emptying the Trash failed:', err));
