@@ -40,3 +40,29 @@ test('zero or invalid amounts are ignored', () => {
   assert.equal(report.scholarships[0].allowances, undefined);
   assert.equal(report.scholarships[0].scholars[0].totalDiscount, 50000);
 });
+
+// Editing a generated report.
+const { editReport } = require('../routes/fse');
+const term = { academicYear: 'AY 2026–2027', term: '1st Semester', population: 8000 };
+
+test('editing replaces the entered allowances instead of adding to them', () => {
+  const saved = validateReport(body({ allowances: { meal: 5000 } })).report;
+  const { report, error } = editReport(saved, { ...term, scholarships: [{ code: '1060', category: 'internalNonAcademic', allowances: { book: 1000 } }] });
+  assert.equal(error, undefined);
+  const [s1, s2] = report.scholarships[0].scholars;
+  assert.equal(s1.totalDiscount, 51000);
+  assert.deepEqual(s1.allowanceDetail, { book: 1000 });
+  // The file's own meal allowance stays.
+  assert.equal(s2.allowances, 2000);
+  assert.deepEqual(s2.allowanceDetail, { meal: 1000, book: 1000 });
+  assert.equal(s2.totalDiscount, 41000);
+});
+
+test('editing can change the category and population, and leave a scholarship out', () => {
+  const saved = validateReport(body()).report;
+  const edited = editReport(saved, { ...term, population: 9000, scholarships: [{ code: '1060', category: 'special', specialFunding: 'internal' }] }).report;
+  assert.equal(edited.population, 9000);
+  assert.equal(edited.scholarships[0].category, 'special');
+  assert.equal(edited.scholarships[0].scholars[0].fse, 1);
+  assert.match(editReport(saved, { ...term, scholarships: [] }).error, /no scholarships/);
+});
