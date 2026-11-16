@@ -200,7 +200,7 @@ async function createMessage(req, { studentNumber, inbox = ADSO, office, peer, f
   const thread = studentNumber ? { studentNumber, inbox } : peer ? { peer, fromOffice } : { office };
   const match = studentNumber ? { studentNumber, ...inboxOf(inbox) } : peer ? { peer, fromOffice } : { office };
   const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
-  const files = req.files || [];
+  const files = Array.isArray(req.files) ? req.files : [];
   if (!body && !files.length) return { status: 400, error: 'Write a message or attach a file.' };
   if (body.length > MAX_BODY) return { status: 400, error: `Messages can be at most ${MAX_BODY} characters.` };
   // No explicit words, from anyone (utils/profanity.js).

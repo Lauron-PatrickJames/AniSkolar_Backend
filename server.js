@@ -9,6 +9,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
 const { clerkMiddleware, getAuth } = require('@clerk/express');
+const { createApiLimiter } = require('./middleware/rateLimit');
 
 const applicationRoutes = require('./routes/applications');
 const studentRoutes = require('./routes/students');
@@ -37,6 +38,11 @@ app.use(express.json());
 // token (if any) — routes that require it call requireAuth() themselves.
 // Needs CLERK_SECRET_KEY (and CLERK_PUBLISHABLE_KEY) in your .env.
 app.use(clerkMiddleware());
+
+// Rate limiting for the API (middleware/rateLimit.js). Render sits behind
+// one proxy, so the client IP is the first hop.
+app.set('trust proxy', 1);
+app.use('/api', createApiLimiter());
 
 // Basic non-breaking CSRF mitigation for JSON API endpoints:
 // 1) Require an authenticated Clerk session for mutating HTTP methods (POST, PUT, PATCH, DELETE).

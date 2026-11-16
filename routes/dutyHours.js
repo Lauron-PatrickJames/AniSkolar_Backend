@@ -705,7 +705,7 @@ router.post('/admin/events/:id/sheets', requireAdso, (req, res, next) => {
   try {
     const event = await findEvent(req, res);
     if (!event) return;
-    const files = req.files || [];
+    const files = Array.isArray(req.files) ? req.files : [];
     if (!files.length) return res.status(400).json({ error: 'Choose the photos or scans of the signed sheets.' });
     const bad = files.find(f => !isRealSheet(f));
     if (bad) return res.status(400).json({ error: `"${bad.originalname}" isn't a real JPG, PNG or PDF.` });
