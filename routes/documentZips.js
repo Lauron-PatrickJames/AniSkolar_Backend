@@ -52,8 +52,9 @@ const renewalFolder = r => clean(`Renewal ${r.term} ${r.academicYear}-${r.academ
 async function sendZip(res, zipName, entries) {
   if (!entries.length) return res.status(404).json({ error: 'There are no files to download.' });
   if (entries.length > MAX_FILES) return res.status(400).json({ error: `That's more than ${MAX_FILES} files; download a smaller group.` });
-  const archiver = require('archiver');
-  const zip = archiver('zip', { zlib: { level: 1 } }); // photos and PDFs barely compress
+  // archiver 8 exports classes (ZipArchive) instead of archiver('zip').
+  const { ZipArchive } = require('archiver');
+  const zip = new ZipArchive({ zlib: { level: 1 } }); // photos and PDFs barely compress
   res.set('Content-Type', 'application/zip');
   res.set('Content-Disposition', `attachment; filename="${zipName.replace(/"/g, '')}.zip"`);
   res.set('Cache-Control', 'private, no-store');
