@@ -137,6 +137,58 @@ const generate = async (req, res) => {
 router.post('/', requireAdso, generate);
 router.put('/', requireAdso, generate);
 
+// A saved scholarship's rows as they came from the registrar's file: the
+// allowances the AdSO entered are taken back out, so new ones can be applied.
+function fileRows(s) {
+  const extra = allowanceDetail(s.allowances);
+  const extraSum = extra ? Object.values(extra).reduce((n, v) => n + v, 0) : 0;
+  const round = v => Math.round(v * 100) / 100;
+  return (s.scholars || []).map(r => {
+    const detail = { ...(r.allowanceDetail || {}) };
+    if (extra) for (const [k, v] of Object.entries(extra)) { detail[k] = round((detail[k] || 0) - v); if (detail[k] <= 0) delete detail[k]; }
+    return {
+      studentId: r.studentId, program: r.program, matriculation: r.matriculation, discount: r.discount,
+      allowances: Math.max(0, round((r.allowances || 0) - extraSum)),
+      allowanceDetail: Object.keys(detail).length ? detail : undefined,
+      totalDiscount: round(r.totalDiscount - extraSum),
+    };
+  });
+}
+
+// The edited report: the term details and, per scholarship, its category,
+// funding and allowances, or leaving it out (not listed). The registrar's
+// rows and amounts stay as they were uploaded. Returns { report } or { error }.
+function editReport(saved, body) {
+  const edits = new Map((Array.isArray(body.scholarships) ? body.scholarships : [])
+    .filter(e => e && typeof e.code === 'string').map(e => [e.code.trim(), e]));
+  return validateReport({
+    ...body,
+    fileName: saved.fileName,
+    scholarships: (saved.scholarships || []).filter(s => edits.has(s.code)).map(s => {
+      const e = edits.get(s.code);
+      return { ...s, category: e.category, specialFunding: e.specialFunding, allowances: e.allowances, scholars: fileRows(s) };
+    }),
+  });
+}
+
+// PUT /api/fse/:id — edits a generated report (see editReport).
+router.put('/:id', requireAdso, async (req, res) => {
+  const id = toId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid report id.' });
+  try {
+    const doc = await FseReport.findById(id);
+    if (!doc) return res.status(404).json({ error: 'Report not found.' });
+    const { report, error } = editReport(doc.toObject(), req.body || {});
+    if (error) return res.status(400).json({ error });
+    doc.set({ ...report, updatedBy: req.adminUser.email });
+    const out = (await doc.save()).toObject();
+    res.json({ report: { ...out, id: String(out._id) } });
+  } catch (err) {
+    console.error('Edit FSE report error:', err);
+    res.status(500).json({ error: 'Failed to save the FSE report.' });
+  }
+});
+
 // DELETE /api/fse/:id
 router.delete('/:id', requireAdso, async (req, res) => {
   const id = toId(req.params.id);
@@ -157,3 +209,4 @@ router.delete('/:id', requireAdso, async (req, res) => {
 
 module.exports = router;
 module.exports.validateReport = validateReport;
+module.exports.editReport = editReport;
