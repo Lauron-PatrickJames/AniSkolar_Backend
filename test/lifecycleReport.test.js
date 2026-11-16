@@ -13,8 +13,8 @@ describe('GET /api/renewals/admin/all', () => {
   let stored;
   beforeEach(() => {
     stored = [
-      renewal('202312345', 's1', 2026, '1st Semester', 'Renewed'),   // SFAG (AdSO)
-      renewal('202312345', 's1', 2026, '2nd Semester', 'Not Renewed'),
+      renewal('202399001', 's1', 2026, '1st Semester', 'Renewed'),   // SFAG (AdSO)
+      renewal('202399001', 's1', 2026, '2nd Semester', 'Not Renewed'),
       renewal('202398765', 's13', 2026, '1st Semester', 'Renewed'),  // CBAASG
     ];
     Renewal.find = () => query(stored);
