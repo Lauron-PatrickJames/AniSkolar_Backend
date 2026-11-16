@@ -20,6 +20,13 @@ const scholarSchema = new mongoose.Schema({
     type: new mongoose.Schema({ meal: Number, monthly: Number, dorm: Number, other: Number, book: Number }, { _id: false }),
     default: undefined,
   },
+  // The allowances the AdSO entered for this scholar (from a donor or
+  // sponsor), already in allowanceDetail / allowances / totalDiscount; kept
+  // apart so editing can change them.
+  entered: {
+    type: new mongoose.Schema({ meal: Number, monthly: Number, dorm: Number, other: Number, book: Number }, { _id: false }),
+    default: undefined,
+  },
   totalDiscount: { type: Number, min: 0, required: true },  // what the FSE counts
   fse: { type: Number, min: 0, required: true },
 }, { _id: false });
@@ -41,6 +48,16 @@ const scholarshipSchema = new mongoose.Schema({
     type: new mongoose.Schema({ meal: Number, monthly: Number, dorm: Number, other: Number, book: Number }, { _id: false }),
     default: undefined,
   },
+  // Scholars the AdSO added by hand when the file is missing some (e.g. rows
+  // lost from the registrar's export): how many, their total assessment and
+  // total discount, and where the numbers come from. Counted in the FSE at
+  // the group's average.
+  adjustment: {
+    type: new mongoose.Schema({
+      scholars: { type: Number, min: 1 }, assessment: { type: Number, min: 0 }, discount: { type: Number, min: 0 }, note: String,
+    }, { _id: false }),
+    default: undefined,
+  },
   scholars: { type: [scholarSchema], default: [] },
 }, { _id: false });
 
@@ -51,6 +68,13 @@ const fseReportSchema = new mongoose.Schema({
   spoonRecipients: { type: Number, min: 0 },                     // Lasallian SPOON recipients (entered)
   asOf: Date,
   fileName: { type: String, trim: true },
+  // Other grants the AdSO added to listed scholars: e.g. DOST for students
+  // the registrar's file lists under another scholarship (each student is
+  // listed once). Added to that row as "other financial assistance".
+  grants: {
+    type: [new mongoose.Schema({ label: String, amount: Number, studentIds: [String] }, { _id: false })],
+    default: undefined,
+  },
   scholarships: { type: [scholarshipSchema], default: [] },
   updatedBy: String,
 }, { timestamps: true });
