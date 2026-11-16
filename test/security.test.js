@@ -24,27 +24,27 @@ describe('complete-profile: a student number with office-added records', () => {
 
   test('someone else who knows the number is refused', async () => {
     users.u1 = clerkUser('classmate@dlsud.edu.ph');
-    const res = await call(a, 'POST', '/api/students/complete-profile', { user: 'u1', body: { studentNumber: '202312345' } });
+    const res = await call(a, 'POST', '/api/students/complete-profile', { user: 'u1', body: { studentNumber: '202399001' } });
     assert.equal(res.status, 409);
     assert.match(res.body.error, /different DLSU-D email/);
   });
 
   test('the person the office added gets past the check', async () => {
     users.u2 = clerkUser('Player@dlsud.edu.ph');
-    const res = await call(a, 'POST', '/api/students/complete-profile', { user: 'u2', body: { studentNumber: '202312345' } });
+    const res = await call(a, 'POST', '/api/students/complete-profile', { user: 'u2', body: { studentNumber: '202399001' } });
     assert.notEqual(res.status, 409, res.body.error);           // fails later only on the (empty) form fields
   });
 
   test('a number with no records is unaffected', async () => {
     Application.find = () => query([]);
     users.u3 = clerkUser('newstudent@dlsud.edu.ph');
-    const res = await call(a, 'POST', '/api/students/complete-profile', { user: 'u3', body: { studentNumber: '202312345' } });
+    const res = await call(a, 'POST', '/api/students/complete-profile', { user: 'u3', body: { studentNumber: '202399001' } });
     assert.notEqual(res.status, 409, res.body.error);
   });
 
   test('an unverified email is refused', async () => {
     users.u4 = clerkUser('player@dlsud.edu.ph', { verified: false });
-    const res = await call(a, 'POST', '/api/students/complete-profile', { user: 'u4', body: { studentNumber: '202312345' } });
+    const res = await call(a, 'POST', '/api/students/complete-profile', { user: 'u4', body: { studentNumber: '202399001' } });
     assert.equal(res.status, 403);
   });
 });

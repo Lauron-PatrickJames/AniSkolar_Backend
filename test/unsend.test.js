@@ -18,7 +18,7 @@ beforeEach(() => {
   update = null; cancelled = null; sent = false; filesDeleted = [];
   users.s1 = clerkUser('student@dlsud.edu.ph');
   users.adso = adsoAdmin();
-  Student.findOne = () => query({ studentNumber: '202312345' });
+  Student.findOne = () => query({ studentNumber: '202399001' });
   Message.findById = () => query(message);
   Message.updateOne = async (q, u) => { update = u; };
   OutboxEmail.deleteMany = async q => { cancelled = q; };
@@ -26,7 +26,7 @@ beforeEach(() => {
   gridfs.deleteFile = async id => { filesDeleted.push(String(id)); };
 });
 
-const studentMessage = extra => ({ _id: ID, studentNumber: '202312345', from: 'student', body: 'Wrong file po', attachments: [{ fileId: 'f1', filename: 'cor.jpg' }], createdAt: minutesAgo(5), readAt: null, ...extra });
+const studentMessage = extra => ({ _id: ID, studentNumber: '202399001', from: 'student', body: 'Wrong file po', attachments: [{ fileId: 'f1', filename: 'cor.jpg' }], createdAt: minutesAgo(5), readAt: null, ...extra });
 
 describe('a student unsending their message', () => {
   test('removes the text and files, and cancels the waiting email', async () => {

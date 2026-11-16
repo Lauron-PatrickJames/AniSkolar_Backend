@@ -59,7 +59,7 @@ describe('held scholarships', () => {
     Renewal.find = () => query([]);
   });
   const grant = (scholarshipId, reviewedAt, extra = {}) => ({ scholarshipId, scholarshipName: scholarshipId, createdAt: reviewedAt, reviewedAt, ...extra });
-  const held = async now => (await findHeldScholarships('202312345', { now: at(now) })).map(h => h.scholarshipId);
+  const held = async now => (await findHeldScholarships('202399001', { now: at(now) })).map(h => h.scholarshipId);
 
   test('a USG grant counts during its semester only', async () => {
     approved = [grant('s11', '2026-04-15T03:00:00Z')];

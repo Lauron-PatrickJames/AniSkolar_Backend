@@ -17,7 +17,7 @@ const ALLOWED_EMAIL_DOMAIN = '@dlsud.edu.ph';
 
 // DLSU-D student numbers: the 4-digit year the student first enrolled at
 // DLSU-D (possibly in high school, kept into college), then 5
-// digits, e.g. 202312345. Same rule as CompleteProfilePage in the frontend.
+// digits, e.g. 202399001. Same rule as CompleteProfilePage in the frontend.
 // The year is NOT the college entry year, so it says nothing about year level.
 function validStudentNumber(value) {
   if (typeof value !== 'string' || !/^\d{9}$/.test(value.trim())) return false;
@@ -429,7 +429,7 @@ router.post('/complete-profile', async (req, res) => {
     }
     // Also rejects non-strings, so the value is safe to use in a query.
     if (!validStudentNumber(req.body.studentNumber)) {
-      return res.status(400).json({ error: 'Student numbers have 9 digits and start with the year you entered, like 202312345.' });
+      return res.status(400).json({ error: 'Student numbers have 9 digits and start with the year you entered, like 202399001.' });
     }
     const studentNumber = req.body.studentNumber.trim();
 

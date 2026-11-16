@@ -9,7 +9,7 @@ const Application = require('../models/Application');
 const ApplicationDraft = require('../models/ApplicationDraft');
 const { computeProfileCompletion } = require('../utils/profileCompletion');
 
-const CORE = { studentNumber: '202312345', programCode: 'BSIT', yearLevel: '2nd Year', gpa: 3.25 };
+const CORE = { studentNumber: '202399001', programCode: 'BSIT', yearLevel: '2nd Year', gpa: 3.25 };
 const PERSONAL = { firstName: 'Juan Miguel', lastName: 'Dela Cruz', middleName: 'Santos', dateOfBirth: new Date('2005-03-01'), placeOfBirth: 'Dasmariñas', nationality: 'Filipino', civilStatus: 'Single' };
 const CONTACT = { homeAddress: '12 Rizal St.', province: 'Cavite', cityMunicipality: 'Dasmariñas City', zipCode: '4114', mobileNumber: '09171234567' };
 
@@ -26,9 +26,9 @@ describe('profile completion', () => {
   });
 
   test('the core needs program, year level and GPA', () => {
-    assert.equal(computeProfileCompletion({ studentNumber: '202312345', programCode: 'BSIT', yearLevel: '2nd Year' }).coreComplete, false);
+    assert.equal(computeProfileCompletion({ studentNumber: '202399001', programCode: 'BSIT', yearLevel: '2nd Year' }).coreComplete, false);
     // 1st years have no GPA yet.
-    assert.equal(computeProfileCompletion({ studentNumber: '202312345', programCode: 'BSIT', yearLevel: '1st Year' }).coreComplete, true);
+    assert.equal(computeProfileCompletion({ studentNumber: '202399001', programCode: 'BSIT', yearLevel: '1st Year' }).coreComplete, true);
   });
 
   test('telephone and suffix never count; a guardian only without two living parents', () => {
@@ -60,16 +60,16 @@ describe('onboarding (POST /api/students/complete-profile)', () => {
   });
 
   test('saves with only the core, and reports what’s left', async () => {
-    const res = await call(a, 'POST', '/api/students/complete-profile', { user: 'n1', body: { studentNumber: '202312345', programCode: 'BSIT', yearLevel: '2nd Year', gpa: '3.25' } });
+    const res = await call(a, 'POST', '/api/students/complete-profile', { user: 'n1', body: { studentNumber: '202399001', programCode: 'BSIT', yearLevel: '2nd Year', gpa: '3.25' } });
     assert.equal(res.status, 201, res.body.error);
-    assert.equal(saved.studentNumber, '202312345');
+    assert.equal(saved.studentNumber, '202399001');
     assert.equal(res.body.student.completion.coreComplete, true);
     assert.equal(res.body.student.completion.complete, false);
     assert.equal(saved.identityConfirmedAt, undefined, 'identity not confirmed yet');
   });
 
   test('refuses without the year level', async () => {
-    const res = await call(a, 'POST', '/api/students/complete-profile', { user: 'n1', body: { studentNumber: '202312345', programCode: 'BSIT', gpa: '3.25' } });
+    const res = await call(a, 'POST', '/api/students/complete-profile', { user: 'n1', body: { studentNumber: '202399001', programCode: 'BSIT', gpa: '3.25' } });
     assert.equal(res.status, 400);
     assert.match(res.body.error, /year level/);
   });

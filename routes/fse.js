@@ -39,6 +39,9 @@ function validateReport(body) {
     if (s.category === 'special' && !SPECIAL_FUNDING.includes(s.specialFunding)) {
       return { error: `Choose how special program ${s.code} is funded.` };
     }
+    // Allowances the AdSO entered for this scholarship, per scholar.
+    const extra = allowanceDetail(s.allowances);
+    const extraSum = extra ? Object.values(extra).reduce((n, v) => n + v, 0) : 0;
     const scholars = [];
     for (const r of Array.isArray(s.scholars) ? s.scholars : []) {
       const matriculation = money(r.matriculation);
@@ -46,15 +49,19 @@ function validateReport(body) {
       if (!r.studentId || matriculation === null || totalDiscount === null || matriculation === 0) {
         return { error: `Scholarship ${s.code} has a row without a student ID, matriculation or discount.` };
       }
+      // The file's own allowances (if any) plus the entered ones.
+      const detail = { ...(allowanceDetail(r.allowanceDetail) || {}) };
+      if (extra) for (const [k, v] of Object.entries(extra)) detail[k] = Math.round(((detail[k] || 0) + v) * 100) / 100;
+      const total = Math.round((totalDiscount + extraSum) * 100) / 100;
       scholars.push({
         studentId: String(r.studentId).trim(),
         program: typeof r.program === 'string' ? r.program.trim() : undefined,
         matriculation,
         discount: money(r.discount) ?? 0,
-        allowances: money(r.allowances) ?? 0,
-        allowanceDetail: allowanceDetail(r.allowanceDetail),
-        totalDiscount,
-        fse: totalDiscount / matriculation,
+        allowances: Math.round(((money(r.allowances) ?? 0) + extraSum) * 100) / 100,
+        allowanceDetail: Object.keys(detail).length ? detail : undefined,
+        totalDiscount: total,
+        fse: total / matriculation,
       });
     }
     count += scholars.length;
@@ -65,6 +72,7 @@ function validateReport(body) {
       subcategory: typeof s.subcategory === 'string' ? s.subcategory.trim() : '',
       category: s.category,
       specialFunding: s.category === 'special' ? s.specialFunding : undefined,
+      allowances: extra,
       scholars,
     });
   }
@@ -87,10 +95,10 @@ function validateReport(body) {
 
 const toId = id => { try { return new ObjectId(id); } catch { return null; } };
 
-// GET /api/fse — saved semesters, newest first (without the scholar rows).
+// GET /api/fse — the generated reports, newest first (without the scholar rows).
 router.get('/', requireAdso, async (req, res) => {
   try {
-    const reports = await FseReport.find({}).select('-scholarships.scholars').sort({ academicYear: -1, term: -1 }).lean();
+    const reports = await FseReport.find({}).select('-scholarships.scholars').sort({ createdAt: -1 }).lean();
     res.json({ reports: reports.map(r => ({ ...r, id: String(r._id) })) });
   } catch (err) {
     console.error('List FSE reports error:', err);
@@ -112,23 +120,22 @@ router.get('/:id', requireAdso, async (req, res) => {
   }
 });
 
-// PUT /api/fse — saves a semester; replaces an existing report for the
-// same academic year and term.
-router.put('/', requireAdso, async (req, res) => {
+// POST /api/fse — generates a report: a new one every time (the AdSO
+// generates FSE reports whenever they're needed; earlier ones are kept).
+// PUT is kept for older clients and does the same.
+const generate = async (req, res) => {
   const { report, error } = validateReport(req.body || {});
   if (error) return res.status(400).json({ error });
   try {
-    const saved = await FseReport.findOneAndUpdate(
-      { academicYear: report.academicYear, term: report.term },
-      { $set: { ...report, updatedBy: req.adminUser.email } },
-      { upsert: true, returnDocument: 'after', runValidators: true, setDefaultsOnInsert: true }
-    ).lean();
-    res.json({ report: { ...saved, id: String(saved._id) } });
+    const saved = (await FseReport.create({ ...report, updatedBy: req.adminUser.email })).toObject();
+    res.status(201).json({ report: { ...saved, id: String(saved._id) } });
   } catch (err) {
     console.error('Save FSE report error:', err);
     res.status(500).json({ error: 'Failed to save the FSE report.' });
   }
-});
+};
+router.post('/', requireAdso, generate);
+router.put('/', requireAdso, generate);
 
 // DELETE /api/fse/:id
 router.delete('/:id', requireAdso, async (req, res) => {

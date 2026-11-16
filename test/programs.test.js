@@ -28,7 +28,7 @@ describe('POST /api/applications: program-limited scholarships', () => {
     users.s1 = clerkUser('student@dlsud.edu.ph');
     program = 'BSIT';
     setting = { status: 'Open' };                               // opened, rules untouched
-    Student.findOne = () => query({ studentNumber: '202312345', programCode: program });
+    Student.findOne = () => query({ studentNumber: '202399001', programCode: program });
     ScholarshipSetting.findOne = () => query(setting);
     Application.distinct = () => query([]);                     // no current scholars: slots free
   });

@@ -1,8 +1,8 @@
 const mongoose = require('mongoose');
 
-// One semester's Full Scholarship Equivalent (FSE) report, built from the
-// registrar's scholarship export that the AdSO uploads (see the admin FSE
-// page). FSE per scholar = total discount / matriculation (DLSP FSE
+// A Full Scholarship Equivalent (FSE) report, generated whenever the AdSO
+// needs one from the registrar's raw scholarship assessment report (see the
+// admin FSE page); each generation is kept as its own report. FSE per scholar = total discount / matriculation (DLSP FSE
 // manual); the report's totals are computed from these rows when read.
 
 const CATEGORIES = ['internalAcademic', 'internalNonAcademic', 'external', 'special'];
@@ -35,6 +35,12 @@ const scholarshipSchema = new mongoose.Schema({
   // Special programs only: how the program is funded (the FSE sheet splits
   // special-program headcount into internally / externally / co-funded).
   specialFunding: { type: String, enum: SPECIAL_FUNDING },
+  // The allowances per scholar the AdSO entered for this scholarship (from
+  // its donor or sponsoring office); added to each grantee's discount.
+  allowances: {
+    type: new mongoose.Schema({ meal: Number, monthly: Number, dorm: Number, other: Number, book: Number }, { _id: false }),
+    default: undefined,
+  },
   scholars: { type: [scholarSchema], default: [] },
 }, { _id: false });
 
@@ -49,7 +55,8 @@ const fseReportSchema = new mongoose.Schema({
   updatedBy: String,
 }, { timestamps: true });
 
-fseReportSchema.index({ academicYear: 1, term: 1 }, { unique: true });
+// Generated on demand: any number per term, newest first.
+fseReportSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model('FseReport', fseReportSchema);
 module.exports.CATEGORIES = CATEGORIES;

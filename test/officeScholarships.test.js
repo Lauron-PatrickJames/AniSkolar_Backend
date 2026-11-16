@@ -119,7 +119,7 @@ describe('slot limits', () => {
     holders = Array.from({ length: count }, (_, i) => `20230000${i}`);
     Application.distinct = () => query(holders);
     Student.find = () => query(holders.map(studentNumber => ({ studentNumber, name: 'Juan Miguel Dela Cruz' })));
-    return slotsFull(findScholarship(id), '202312345');
+    return slotsFull(findScholarship(id), '202399001');
   };
 
   test('Padayon Pioneers takes 2 scholars in all', async () => {
