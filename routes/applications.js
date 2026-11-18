@@ -1070,6 +1070,9 @@ router.get('/', requireAdmin, async (req, res) => {
                 yearLevel: '$$s.yearLevel',
                 section: '$$s.section',
                 gpa: '$$s.gpa',
+                // What the student says they hold (not verified).
+                declaredScholarships: '$$s.declaredScholarships',
+                declaredScholarshipsAt: '$$s.declaredScholarshipsAt',
                 updatedAt: '$$s.updatedAt',
               },
             },

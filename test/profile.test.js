@@ -97,6 +97,35 @@ describe('PATCH /api/students/me', () => {
     assert.ok(res.body.student.completion);
   });
 
+  test('scholarships the student holds: saved, tidied, and "none" is an answer', async () => {
+    doc = student();
+    const res = await call(a, 'PATCH', '/api/students/me', { user: 'u1', body: { declaredScholarships: [
+      { name: '  DOST-SEI   Merit ', funding: 'external' },
+      { name: 'dost-sei merit', funding: 'external' },
+      { name: 'Academic Scholarship', funding: 'internal' },
+    ] } });
+    assert.equal(res.status, 200, res.body.error);
+    assert.deepEqual(doc.declaredScholarships.map(s => ({ name: s.name, funding: s.funding })), [
+      { name: 'DOST-SEI Merit', funding: 'external' },
+      { name: 'Academic Scholarship', funding: 'internal' },
+    ]);
+    assert.ok(doc.declaredScholarshipsAt instanceof Date);
+
+    const none = await call(a, 'PATCH', '/api/students/me', { user: 'u1', body: { declaredScholarships: [] } });
+    assert.equal(none.status, 200, none.body.error);
+    assert.equal(doc.declaredScholarships.length, 0);
+    assert.ok(doc.declaredScholarshipsAt);
+  });
+
+  test('scholarships the student holds: a name and who funds it are required', async () => {
+    doc = student();
+    for (const declaredScholarships of [[{ name: ' ', funding: 'external' }], [{ name: 'CHED Merit' }], 'DOST', Array.from({ length: 11 }, (_, i) => ({ name: `S${i}`, funding: 'external' }))]) {
+      const res = await call(a, 'PATCH', '/api/students/me', { user: 'u1', body: { declaredScholarships } });
+      assert.equal(res.status, 400, JSON.stringify(declaredScholarships));
+    }
+    assert.equal(doc.declaredScholarships, undefined);
+  });
+
   test('a new student can correct a name the directory split wrongly', async () => {
     doc = student();
     const res = await call(a, 'PATCH', '/api/students/me', { user: 'u1', body: { firstName: 'Juan Miguel', lastName: 'Dela Cruz' } });

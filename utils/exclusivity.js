@@ -35,7 +35,35 @@ async function findHeldScholarships(studentNumber, { excludeApplicationId, now =
     Renewal.find({ studentNumber, academicYear: { $gte: fromYear }, status: { $in: ['Renewed', 'Not Renewed', 'Not Continuing'] } })
       .select('scholarshipId scholarshipName status updatedAt').lean(),
   ]);
+  return heldFrom(applications, renewals, now);
+}
 
+// The same for every student at once (the AdSO's Students page): two
+// queries in all. Returns Map studentNumber -> held list (students who
+// hold none are left out).
+async function findHeldScholarshipsByStudent({ now = new Date() } = {}) {
+  const fromYear = academicYearStart(now) - 1;
+  const [applications, renewals] = await Promise.all([
+    Application.find({ status: 'Approved' })
+      .select('studentNumber scholarshipId scholarshipName createdAt reviewedAt endedAt').lean(),
+    Renewal.find({ academicYear: { $gte: fromYear }, status: { $in: ['Renewed', 'Not Renewed', 'Not Continuing'] } })
+      .select('studentNumber scholarshipId scholarshipName status updatedAt').lean(),
+  ]);
+  const group = list => list.reduce((m, x) => m.set(x.studentNumber, [...(m.get(x.studentNumber) ?? []), x]), new Map());
+  const apps = group(applications);
+  const rens = group(renewals);
+  const result = new Map();
+  for (const studentNumber of new Set([...apps.keys(), ...rens.keys()])) {
+    const held = heldFrom(apps.get(studentNumber) ?? [], rens.get(studentNumber) ?? [], now);
+    if (held.length) result.set(studentNumber, held);
+  }
+  return result;
+}
+
+// The rule itself, over one student's approved applications and renewals
+// from this academic year or last.
+function heldFrom(applications, renewals, now) {
+  const fromYear = academicYearStart(now) - 1;
   // Latest event per scholarship decides whether it's held.
   const latest = new Map();
   const consider = (scholarshipId, scholarshipName, at, held) => {
@@ -76,4 +104,4 @@ async function otherScholarshipsHeld(studentNumber, scholarshipId, { excludeAppl
   return held.filter(s => s.scholarshipId !== scholarshipId);
 }
 
-module.exports = { EXCLUSIVE_SCHOLARSHIP_ID, findHeldScholarships, otherScholarshipsHeld };
+module.exports = { EXCLUSIVE_SCHOLARSHIP_ID, findHeldScholarships, findHeldScholarshipsByStudent, otherScholarshipsHeld };

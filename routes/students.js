@@ -9,7 +9,8 @@ const Application = require('../models/Application');
 const { findProgram, YEAR_LEVELS } = require('../data/programs');
 const { requireAdso } = require('../middleware/requireAdmin');
 const { requireStudent } = require('../middleware/requireStudent');
-const { EXCLUSIVE_SCHOLARSHIP_ID, findHeldScholarships } = require('../utils/exclusivity');
+const exclusivity = require('../utils/exclusivity');
+const { EXCLUSIVE_SCHOLARSHIP_ID, findHeldScholarships } = exclusivity;
 const { slotsFull: scholarSlotsFull } = require('../utils/collegeSlots');
 const { allScholarships } = require('../data/scholarships');
 
@@ -203,7 +204,31 @@ function sanitizeProfileFields(body) {
     return { error: 'That parent can’t be your guardian. Choose another guardian.' };
   }
 
+  if (body.declaredScholarships !== undefined) {
+    const declared = sanitizeDeclaredScholarships(body.declaredScholarships);
+    if (declared.error) return { error: declared.error };
+    data.declaredScholarships = declared.list;
+    data.declaredScholarshipsAt = new Date();
+  }
+
   return { data };
+}
+
+// Scholarships the student says they hold: [{ name, funding }], at most
+// MAX_DECLARED; an empty list means "none". Names are trimmed and repeats
+// dropped. Returns { list } or { error }.
+const MAX_DECLARED = 10;
+function sanitizeDeclaredScholarships(value) {
+  if (!Array.isArray(value)) return { error: 'Scholarships you hold must be a list.' };
+  if (value.length > MAX_DECLARED) return { error: `List at most ${MAX_DECLARED} scholarships.` };
+  const list = [];
+  for (const item of value) {
+    const name = typeof item?.name === 'string' ? item.name.trim().replace(/\s+/g, ' ').slice(0, 120) : '';
+    if (!name) return { error: 'Enter the name of each scholarship you hold.' };
+    if (!Student.DECLARED_FUNDING.includes(item.funding)) return { error: `Say who funds the ${name}: DLSU-D or an outside grantor.` };
+    if (!list.some(s => s.name.toLowerCase() === name.toLowerCase())) list.push({ name, funding: item.funding });
+  }
+  return { list };
 }
 
 // After an update: a guardian who is the father or mother mirrors that
@@ -586,12 +611,15 @@ router.post('/me/correction-requests', async (req, res) => {
 // GET /api/students — AdSO only: every student who finished setting up a
 // profile, with how many applications they've submitted, so the office can
 // see who signed up but hasn't applied yet. Only the profile details the
-// student gave at sign-up; no activity tracking.
+// student gave at sign-up; no activity tracking. Also, per student, the
+// scholarships they hold by AniSkolar's records (utils/exclusivity.js) and
+// the ones they declared themselves, so the office can find students
+// holding more than one.
 router.get('/', requireAdso, async (req, res) => {
   try {
-    const [students, counts] = await Promise.all([
+    const [students, counts, heldBy] = await Promise.all([
       Student.find({})
-        .select('studentNumber firstName middleName lastName name email avatarUrl programCode course college yearLevel createdAt')
+        .select('studentNumber firstName middleName lastName name email avatarUrl programCode course college yearLevel createdAt declaredScholarships declaredScholarshipsAt')
         .sort({ createdAt: -1 })
         .lean(),
       Application.aggregate([{ $group: {
@@ -601,6 +629,7 @@ router.get('/', requireAdso, async (req, res) => {
         ended: { $sum: { $cond: [{ $and: [{ $eq: ['$status', 'Approved'] }, { $ifNull: ['$endedAt', false] }] }, 1, 0] } },
         rejected: { $sum: { $cond: [{ $eq: ['$status', 'Rejected'] }, 1, 0] } },
       } }]),
+      exclusivity.findHeldScholarshipsByStudent(),
     ]);
     // Where the student stands, for the list's filters (deleting checks
     // the exact rule: utils/studentDelete.js).
@@ -623,6 +652,9 @@ router.get('/', requireAdso, async (req, res) => {
         applications: byStudent.get(s.studentNumber)?.n ?? 0,
         lastAppliedAt: byStudent.get(s.studentNumber)?.last ?? null,
         outcome: outcomeOf(byStudent.get(s.studentNumber)),
+        held: heldBy.get(s.studentNumber) ?? [],
+        declaredScholarships: s.declaredScholarships ?? [],
+        declaredScholarshipsAt: s.declaredScholarshipsAt ?? null,
       })),
     });
   } catch (err) {

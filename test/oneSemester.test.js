@@ -8,7 +8,7 @@ const { users, clerkUser, query, app, call } = require('./helpers');
 const Application = require('../models/Application');
 const Renewal = require('../models/Renewal');
 const { semesterEnd } = require('../utils/semester');
-const { findHeldScholarships } = require('../utils/exclusivity');
+const { findHeldScholarships, findHeldScholarshipsByStudent } = require('../utils/exclusivity');
 const { SCHOLARSHIPS } = require('../data/scholarships');
 
 const ONE_SEMESTER = ['s8', 's10', 's11', 's15', 's16', 's17'];
@@ -86,6 +86,18 @@ describe('held scholarships', () => {
   test('scholarships kept until graduation are unchanged (POLCA)', async () => {
     approved = [grant('s3', '2024-08-20T03:00:00Z')];
     assert.deepEqual(await held('2026-11-01T03:00:00Z'), ['s3']);
+  });
+
+  test('for every student at once: the same rule, per student (Students page)', async () => {
+    approved = [
+      grant('s3', '2024-08-20T03:00:00Z', { studentNumber: '202399001' }),
+      grant('s11', '2026-08-20T03:00:00Z', { studentNumber: '202399001' }),
+      grant('s11', '2026-04-15T03:00:00Z', { studentNumber: '202399002' }), // last semester: over
+      grant('s3', '2025-08-20T03:00:00Z', { studentNumber: '202399003', endedAt: '2026-06-01T03:00:00Z' }),
+    ];
+    const byStudent = await findHeldScholarshipsByStudent({ now: at('2026-11-01T03:00:00Z') });
+    assert.deepEqual([...byStudent.keys()], ['202399001']);
+    assert.deepEqual(byStudent.get('202399001').map(h => h.scholarshipId).sort(), ['s11', 's3']);
   });
 });
 

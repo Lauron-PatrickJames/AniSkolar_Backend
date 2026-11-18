@@ -2,6 +2,9 @@ const mongoose = require('mongoose');
 
 const CIVIL_STATUS_OPTIONS = ['Single', 'Married', 'Widowed', 'Separated', 'Divorced'];
 const GUARDIAN_TYPES = ['father', 'mother', 'other'];
+// Who funds a scholarship the student declares: DLSU-D or its benefactors
+// ('internal'), or an outside grantor such as DOST, CHED or an LGU.
+const DECLARED_FUNDING = ['internal', 'external'];
 const VERIFICATION_GROUPS = ['program', 'enrollment', 'gpa'];
 // Correction requests can also be about identity details, which students
 // can't change after sign-up (routes/students.js LOCKED_FIELDS).
@@ -109,6 +112,22 @@ const studentSchema = new mongoose.Schema({
     guardianAddressSameAsHome: Boolean,
     guardianContactNo: String,
 
+    // Scholarships the student says they hold (Complete your profile /
+    // Profile): ones from before AniSkolar and outside grants (DOST, CHED,
+    // LGU). Self-declared, so shown to the office as the student's word;
+    // utils/exclusivity.js counts only scholarships recorded in AniSkolar.
+    // declaredScholarshipsAt is when they answered, so an empty list then
+    // means "none" rather than "not asked yet".
+    declaredScholarships: {
+        type: [{
+            _id: false,
+            name: { type: String, required: true },
+            funding: { type: String, enum: DECLARED_FUNDING },
+        }],
+        default: undefined,
+    },
+    declaredScholarshipsAt: Date,
+
     // --- Verification of academic details ---
     // Academic details are self-reported until an office verifies them,
     // per group: 'program' (program, course, college), 'enrollment' (year
@@ -146,6 +165,7 @@ const studentSchema = new mongoose.Schema({
 module.exports = mongoose.model('Student', studentSchema);
 module.exports.CIVIL_STATUS_OPTIONS = CIVIL_STATUS_OPTIONS;
 module.exports.GUARDIAN_TYPES = GUARDIAN_TYPES;
+module.exports.DECLARED_FUNDING = DECLARED_FUNDING;
 module.exports.VERIFICATION_GROUPS = VERIFICATION_GROUPS;
 module.exports.CORRECTION_GROUPS = CORRECTION_GROUPS;
 module.exports.NAME_SUFFIXES = NAME_SUFFIXES;
