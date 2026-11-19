@@ -334,7 +334,9 @@ router.post('/direct-award', requireAdmin, (req, res) => {
       // is the final approval. Until the Director approves it's "Under
       // Evaluation" in the queue, and the student isn't emailed yet.
       const role = req.adminUser.adsoRole;
-      const pendingChain = !withForm && approvalChain.inChain({ office: scholarship.office }) && role !== 'director';
+      // Scholarships without an application (the Academic Scholarship, from
+      // the Registrar's list) skip the chain: the list is the decision.
+      const pendingChain = !withForm && approvalChain.inChain({ office: scholarship.office }) && role !== 'director' && acceptsOnlineApplications(scholarship);
       const chainSteps = !pendingChain ? [] : [
         { action: 'endorse', fromStage: 'associate', toStage: 'head', note: 'Added the scholar and endorsed them.' },
         ...(role === 'head' ? [{ action: 'recommendApproval', fromStage: 'head', toStage: 'director', note: 'Added the scholar and recommended approval.' }] : []),
@@ -423,9 +425,16 @@ router.post('/direct-award', requireAdmin, (req, res) => {
 const MAX_BULK_MEMBERS = 500;
 router.post('/direct-award/bulk', requireAdmin, async (req, res) => {
   try {
-    if (!MEMBER_OFFICES.includes(req.adminUser?.office)) return res.status(403).json({ error: 'Only the members-only offices (SDO, ROTC, Vicissitude, Heraldo Filipino) can upload a member list.' });
+    // The members-only offices, and the AdSO for its scholarships without an
+    // application (the Academic Scholarship: a list of who was granted it).
+    if (!canAddScholars(req.adminUser)) return res.status(403).json({ error: 'Only the members-only offices and the AdSO’s Scholarship Associate, Head and Director can upload a list of scholars.' });
     const scholarship = directAwardScholarship(req.adminUser, req.body?.scholarshipId);
-    if (!scholarship || !scholarship.directAward) return res.status(403).json({ error: 'Only the office that handles this scholarship can add its scholars.' });
+    if (!scholarship || (!scholarship.directAward && acceptsOnlineApplications(scholarship))) return res.status(403).json({ error: 'Only the office that handles this scholarship can add its scholars, and only to scholarships without an application.' });
+    // No approval chain: the list is already the decision (the Registrar's
+    // list of who was granted the Academic Scholarship; a members-only
+    // office's members).
+    const role = req.adminUser.adsoRole;
+    const pendingChain = false;
     const award = OFFICE_FORMS[scholarship.id]?.award || { who: 'member', approver: 'office head', note: 'Added by the office.' };
     if (req.body.approved !== true) return res.status(400).json({ error: `Confirm the ${award.approver} approved the list.` });
     const rows = Array.isArray(req.body.members) ? req.body.members : [];
@@ -464,6 +473,10 @@ router.post('/direct-award/bulk', requireAdmin, async (req, res) => {
         }
         student = { studentNumber, firstName, lastName, middleName: '', name: `${firstName} ${lastName}`.toUpperCase(), email, pending: true };
       }
+      const chainSteps = !pendingChain ? [] : [
+        { action: 'endorse', fromStage: 'associate', toStage: 'head', note: 'Added from a list of scholars and endorsed.' },
+        ...(role === 'head' ? [{ action: 'recommendApproval', fromStage: 'head', toStage: 'director', note: 'Added from a list of scholars and recommended.' }] : []),
+      ].map(step => ({ ...step, by, byName: req.adminUser.name, role: role || null, at: now }));
       const application = await Application.create({
         studentNumber,
         scholarshipId: scholarship.id,
@@ -478,6 +491,13 @@ router.post('/direct-award/bulk', requireAdmin, async (req, res) => {
           program: student.programCode || '', yearLevel: student.yearLevel || '',
         },
         awardedDirectly: true,
+        ...(pendingChain ? {
+          status: 'Under Evaluation',
+          approvalStage: role === 'head' ? 'director' : 'head',
+          approvalSteps: chainSteps,
+          internalNotes: note ? [{ text: `Note with the list: ${note}`, by, byName: req.adminUser.name, at: now }] : [],
+          history: [{ status: 'Under Evaluation', note: 'Added by the AdSO from a list of scholars; waiting for approval.', changedBy: by, changedByName: req.adminUser.name, changedByOffice: req.adminUser.office, changedAt: now }],
+        } : {
         status: 'Approved',
         decisionOffice: scholarship.office,
         reviewNote: note || undefined,
@@ -489,6 +509,7 @@ router.post('/direct-award/bulk', requireAdmin, async (req, res) => {
           { status: 'Approved', note: note || `${award.note} (member list)`, changedBy: by, changedByName: req.adminUser.name, changedByOffice: req.adminUser.office, changedAt: now },
           { status: 'Forwarded to LSO', changedBy: 'system', changedByOffice: scholarship.office, changedAt: now },
         ],
+        }),
       });
       if (!student.pending) {
         await stampStudentNames(studentNumber, application);
@@ -496,7 +517,7 @@ router.post('/direct-award/bulk', requireAdmin, async (req, res) => {
         await application.save();
       }
       added.push(studentNumber);
-      if (student.email) {
+      if (student.email && !pendingChain) {
         const { html, text: plain } = renderEmail({
           heading: `You're a ${scholarship.name} scholar`,
           intro: `The ${office.replace(/^the /i, '')} added you as a scholar.`,
@@ -515,7 +536,7 @@ router.post('/direct-award/bulk', requireAdmin, async (req, res) => {
       }
     }
     if (emails.length) queueEmails(emails).then(() => processOutbox()).catch(e => console.error('Member list emails failed:', e));
-    res.status(added.length ? 201 : 200).json({ added, skipped });
+    res.status(added.length ? 201 : 200).json({ added, skipped, ...(pendingChain && added.length ? { awaiting: role === 'head' ? 'director' : 'head' } : {}) });
   } catch (e) {
     console.error('Member list upload error:', e);
     res.status(500).json({ error: 'Failed to add the members.' });
