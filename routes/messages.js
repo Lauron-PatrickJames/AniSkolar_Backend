@@ -259,7 +259,8 @@ router.get('/mine/offices', requireStudent, async (req, res) => {
     const [appOffices, groups] = await Promise.all([
       Application.distinct('office', { studentNumber: req.studentNumber }),
       Message.aggregate([
-        { $match: { studentNumber: req.studentNumber } },
+        // Deleted (unsent) messages are gone for both sides: not the last one shown.
+        { $match: { studentNumber: req.studentNumber, unsentAt: null } },
         { $sort: { createdAt: -1 } },
         { $group: {
           _id: { $ifNull: ['$inbox', ADSO] },
@@ -465,7 +466,7 @@ async function peerGroups(me) {
     .map(t => ({ ...t, other: t.key.slice(prefix.length) }));
   const deleted = states.filter(t => t.clearedAt).map(t => ({ peer: pairKey(me, t.other), createdAt: { $lte: t.clearedAt } }));
   const groups = await Message.aggregate([
-    { $match: { ...peerOf(me), ...(deleted.length ? { $nor: deleted } : {}) } },
+    { $match: { ...peerOf(me), unsentAt: null, ...(deleted.length ? { $nor: deleted } : {}) } },
     { $sort: { createdAt: -1 } },
     { $group: {
       _id: '$peer',
@@ -509,7 +510,7 @@ router.get('/admin/threads', requireAdmin, async (req, res) => {
       // Messages the office deleted stay hidden.
       const deleted = states.filter(t => t.kind === kind && t.clearedAt).map(t => ({ [key]: t.key, createdAt: { $lte: t.clearedAt } }));
       return Message.aggregate([
-        { $match: { [key]: { $nin: [null, ''] }, ...(kind === 'student' ? inboxOf(inbox) : {}), ...(deleted.length ? { $nor: deleted } : {}) } },
+        { $match: { [key]: { $nin: [null, ''] }, unsentAt: null, ...(kind === 'student' ? inboxOf(inbox) : {}), ...(deleted.length ? { $nor: deleted } : {}) } },
         { $sort: { createdAt: -1 } },
         { $group: {
           _id: `$${key}`,
