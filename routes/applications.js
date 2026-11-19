@@ -1093,13 +1093,6 @@ router.get('/export/scholars', requireAdmin, async (req, res) => {
       totalApplications: { label: 'Total Applications', getValue: (s) => s.totalApplications },
       approvedCount: { label: 'Approved', getValue: (s) => s.approvedCount },
       rejectedCount: { label: 'Rejected', getValue: (s) => s.rejectedCount },
-      approvalRate: {
-        label: 'Approval Rate',
-        getValue: (s) => {
-          const decided = s.approvedCount + s.rejectedCount;
-          return decided > 0 ? `${((s.approvedCount / decided) * 100).toFixed(0)}%` : '—';
-        },
-      },
       latestStatus: { label: 'Current Status', getValue: (s) => s.latestStatus || '' },
       isRenewing: { label: 'Renewing', getValue: (s) => (s.isRenewing ? 'Yes' : 'No') },
       firstSubmission: { label: 'First Submission', getValue: (s) => formatDate(s.firstSubmission) },
