@@ -349,9 +349,11 @@ async function runDueJobs(now = new Date()) {
         await record(job, period, null, err.message).catch(() => {});
       }
     }
+    // The AdSO's own automations (utils/customAutomations.js).
+    await require('./customAutomations').runDueCustom(now).catch(err => console.error('Custom automations failed:', err));
   } finally {
     running = false;
   }
 }
 
-module.exports = { runDueJobs, runJob, parseDeadline, isoWeek, JOB_NAMES: Object.keys(JOBS) };
+module.exports = { runDueJobs, runJob, parseDeadline, isoWeek, manilaClock, appUrl, JOB_NAMES: Object.keys(JOBS) };

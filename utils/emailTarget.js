@@ -87,6 +87,17 @@ async function recipientEmails(target) {
   return [...new Set(emails.map(e => e.toLowerCase()))].sort();
 }
 
+// The students a target reaches, with what a personal email needs:
+// [{ studentNumber, email, firstName }], one per email address.
+async function recipientStudents(target) {
+  const students = await Student.find({ ...(await studentFilter(target)), email: { $exists: true, $ne: '' } })
+    .select('studentNumber email firstName').sort({ studentNumber: 1 }).lean();
+  const seen = new Set();
+  return students
+    .map(s => ({ studentNumber: s.studentNumber, email: s.email.toLowerCase(), firstName: s.firstName }))
+    .filter(s => !seen.has(s.email) && seen.add(s.email));
+}
+
 // For the editor: how many students a target reaches, a few names, and
 // student numbers that matched nobody.
 async function previewTarget(target) {
@@ -100,4 +111,4 @@ async function previewTarget(target) {
   };
 }
 
-module.exports = { parseEmailTarget, targetOf, recipientEmails, previewTarget, STATUSES };
+module.exports = { parseEmailTarget, targetOf, recipientEmails, recipientStudents, previewTarget, STATUSES };
