@@ -37,11 +37,12 @@ const add = (user, body) => call(a, 'POST', '/api/applications/direct-award', {
   user, body: { studentNumber: '202399001', directorApproved: 'true', ...body },
 });
 
-test('the Scholarship Associate adds a scholar with a note', async () => {
+test('the Scholarship Associate adds a scholar with a note (endorsed to the Head)', async () => {
   const res = await add('associate', { scholarshipId: 's2', note: 'Approved on a paper application.' });
   assert.equal(res.status, 201, res.body.error);
   assert.equal(created.length, 1);
-  assert.equal(created[0].status, 'Approved');
+  assert.equal(created[0].status, 'Under Evaluation');
+  assert.equal(created[0].approvalStage, 'head');
   assert.equal(created[0].awardedDirectly, true);
   assert.equal(created[0].office, 'LSO');
   assert.deepEqual(created[0].documents, []);

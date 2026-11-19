@@ -177,3 +177,39 @@ describe('office head on leave', () => {
     assert.equal(await expireUnreviewedDuties(NOW), 1);
   });
 });
+
+describe('AdSO-added scholars follow the approval chain', () => {
+  const a = app(require('../routes/applications'), '/api/applications');
+  const Counter = require('../models/Counter');
+  let created;
+  const body = { scholarshipId: 's2', studentNumber: '202399001', note: 'Approved on a paper application.', directorApproved: 'true', acknowledgeOtherScholarship: 'true' };
+  beforeEach(() => {
+    created = null;
+    for (const role of ['associate', 'head', 'director']) users[role] = clerkUser(`${role}@dlsud.edu.ph`, { metadata: { role: 'admin', office: 'ADSO', adsoRole: role } });
+    Student.findOne = () => query({ studentNumber: '202399001', firstName: 'JUAN', lastName: 'DELA CRUZ', name: 'JUAN DELA CRUZ', email: 'juan@dlsud.edu.ph' });
+    Application.find = () => query([]);
+    Application.create = async doc => { created = doc; return { _id: 'a1', ...doc, markModified() {}, async save() {} }; };
+    Counter.findOneAndUpdate = async () => ({ seq: 1 });
+    OutboxEmail.insertMany = async () => [];
+    OutboxEmail.find = () => query([]);
+    OutboxEmail.distinct = async () => [];
+  });
+
+  test('the Associate’s add goes to the Head, the Head’s to the Director', async () => {
+    let res = await call(a, 'POST', '/api/applications/direct-award', { user: 'associate', body });
+    assert.equal(res.status, 201, res.body.error);
+    assert.equal(created.status, 'Under Evaluation');
+    assert.equal(created.approvalStage, 'head');
+    assert.equal(res.body.awaiting, 'head');
+    res = await call(a, 'POST', '/api/applications/direct-award', { user: 'head', body });
+    assert.equal(created.approvalStage, 'director');
+    assert.deepEqual(created.approvalSteps.map(s => s.action), ['endorse', 'recommendApproval']);
+  });
+
+  test('the Director’s add is the final approval', async () => {
+    const res = await call(a, 'POST', '/api/applications/direct-award', { user: 'director', body });
+    assert.equal(res.status, 201, res.body.error);
+    assert.equal(created.status, 'Approved');
+    assert.equal(res.body.awaiting, undefined);
+  });
+});

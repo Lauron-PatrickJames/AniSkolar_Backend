@@ -328,6 +328,17 @@ router.post('/direct-award', requireAdmin, (req, res) => {
 
       const documents = files.length ? await storeFilesInGridFS(files, [docLabel]) : [];
       const by = req.adminUser.email;
+      // The AdSO's own scholarships follow its approval chain (panel, Nov
+      // 2026): the Associate who adds a scholar endorses them to the Head,
+      // the Head recommends them to the Director, and the Director's adding
+      // is the final approval. Until the Director approves it's "Under
+      // Evaluation" in the queue, and the student isn't emailed yet.
+      const role = req.adminUser.adsoRole;
+      const pendingChain = !withForm && approvalChain.inChain({ office: scholarship.office }) && role !== 'director';
+      const chainSteps = !pendingChain ? [] : [
+        { action: 'endorse', fromStage: 'associate', toStage: 'head', note: 'Added the scholar and endorsed them.' },
+        ...(role === 'head' ? [{ action: 'recommendApproval', fromStage: 'head', toStage: 'director', note: 'Added the scholar and recommended approval.' }] : []),
+      ].map(step => ({ ...step, by, byName: req.adminUser.name, role: role || null, at: now }));
       const application = await Application.create({
         studentNumber,
         scholarshipId: scholarship.id,
@@ -345,24 +356,32 @@ router.post('/direct-award', requireAdmin, (req, res) => {
         ...(assessment ? { officeAssessment: { ...assessment, directorApproved: true, updatedBy: by, updatedAt: now } } : {}),
         ...(sfagPercentage ? { sfagPercentage } : {}),
         awardedDirectly: true,
-        status: 'Approved',
-        decisionOffice: scholarship.office,
-        reviewNote: note || undefined,
-        reviewedBy: by,
-        reviewedAt: now,
-        forwardedAt: now,
-        forwardedBy: by,
-        history: [
-          { status: 'Approved', note: note || award.note, changedBy: by, changedByName: req.adminUser.name, changedByOffice: req.adminUser.office, changedAt: now },
-          { status: 'Forwarded to LSO', changedBy: 'system', changedByOffice: scholarship.office, changedAt: now },
-        ],
+        ...(pendingChain ? {
+          status: 'Under Evaluation',
+          approvalStage: role === 'head' ? 'director' : 'head',
+          approvalSteps: chainSteps,
+          internalNotes: note ? [{ text: `Why they’re being added: ${note}`, by, byName: req.adminUser.name, at: now }] : [],
+          history: [{ status: 'Under Evaluation', note: 'Added by the AdSO; waiting for approval.', changedBy: by, changedByName: req.adminUser.name, changedByOffice: req.adminUser.office, changedAt: now }],
+        } : {
+          status: 'Approved',
+          decisionOffice: scholarship.office,
+          reviewNote: note || undefined,
+          reviewedBy: by,
+          reviewedAt: now,
+          forwardedAt: now,
+          forwardedBy: by,
+          history: [
+            { status: 'Approved', note: note || award.note, changedBy: by, changedByName: req.adminUser.name, changedByOffice: req.adminUser.office, changedAt: now },
+            { status: 'Forwarded to LSO', changedBy: 'system', changedByOffice: scholarship.office, changedAt: now },
+          ],
+        }),
       });
       if (!student.pending) {
         await stampStudentNames(studentNumber, application);
         application.markModified('standardInfo');
         await application.save();
       }
-      if (student.email) {
+      if (student.email && !pendingChain) {
         const appUrl = process.env.APP_URL || (process.env.FRONTEND_ORIGINS || '').split(',')[0].trim() || 'http://localhost:3000';
         const office = require('../data/offices').OFFICE_NAMES[scholarship.office] ?? 'the scholarship office';
         const { html, text } = renderEmail({
@@ -383,7 +402,7 @@ router.post('/direct-award', requireAdmin, (req, res) => {
           .then(() => processOutbox())
           .catch(e => console.error('Direct award email failed:', e));
       }
-      res.status(201).json({ application, pendingAccount: !!student.pending });
+      res.status(201).json({ application, pendingAccount: !!student.pending, ...(pendingChain ? { awaiting: application.approvalStage } : {}) });
     } catch (e) {
       console.error('Direct award error:', e);
       res.status(500).json({ error: 'Failed to add the scholar.' });
