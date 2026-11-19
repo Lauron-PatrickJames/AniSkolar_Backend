@@ -1,7 +1,7 @@
 // Number-only fields in application forms (npm test).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { numberFieldError, bodySections } = require('../utils/numberFields');
+const { numberFieldError, numberFieldProblem, bodySections } = require('../utils/numberFields');
 
 test('phone numbers in the usual formats are accepted', () => {
   for (const phone of ['09171234567', '0917 123 4567', '+639171234567', '(046) 481 1900', '481-1900']) {
@@ -37,4 +37,18 @@ test('the body’s JSON sections are read', () => {
   const sections = bodySections({ contactSchool: JSON.stringify({ mobileNo: 'abc' }), standardInfo: 'not json' });
   assert.deepEqual(Object.keys(sections), ['contactSchool']);
   assert.ok(numberFieldError(sections));
+});
+
+test('the SFAG’s bill brackets aren’t phone numbers (telephoneBill, mobilePhoneBill)', () => {
+  assert.equal(numberFieldError({ assetsExpenses: { telephoneBill: '₱0 – ₱5,321.66', mobilePhoneBill: '₱5,321.67 – ₱10,643.32' } }), null);
+  assert.equal(numberFieldError({ contactSchool: { telephoneNumber: '(046) 481 1900' } }), null);
+});
+
+test('the message says where the problem is, and which section', () => {
+  assert.deepEqual(numberFieldProblem({ parentsGuardian: { father: { companyTel: 'none' } } }), {
+    message: 'Parents & Guardian, Father’s company tel. no.: “none” isn’t a phone number. Use digits only, e.g. 09171234567.',
+    section: 'parentsGuardian',
+  });
+  assert.match(numberFieldError({ contactSchool: { mobileNo: 'abc' } }), /^Contact & School, Mobile no\.: /);
+  assert.match(numberFieldError({ siblings: [{ tuitionOrIncome: '5000' }, { tuitionOrIncome: 'five' }] }), /^Siblings, Sibling 2’s tuition or income: /);
 });
