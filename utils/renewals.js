@@ -5,9 +5,9 @@ const { academicYearStartExpr } = require('./academicYear');
 
 // Department head's Student Assistant evaluation (SFAG), from the
 // office's "Performance Evaluation of Student Financial Aid Grantees" form.
-// Each item is rated 1–5. The interview says the form has 19 items; the
-// copy in the NG manuscript (Appendix G) only shows these 15, so the rest
-// must be added here once the AdSO shares the full form. Keep in sync with
+// Each item is rated 1–5: the form's 19 items, in its order (the office's
+// Microsoft Forms version, Nov 2026). Evaluations saved before the last
+// four were added keep their 15-item average. Keep in sync with
 // EVALUATION_ITEMS in the frontend's src/utils/renewals.ts.
 const EVALUATION_ITEMS = [
   { key: 'jobKnowledge', label: 'Job knowledge' },
@@ -25,6 +25,10 @@ const EVALUATION_ITEMS = [
   { key: 'cooperationPublic', label: 'Cooperation with public' },
   { key: 'acceptanceOfSupervision', label: 'Acceptance of supervision' },
   { key: 'reliability', label: 'Reliability and consistency in performance' },
+  { key: 'completionOfTasks', label: 'Completion of tasks' },
+  { key: 'adherenceToSchedule', label: 'Adherence to work schedule' },
+  { key: 'promptness', label: 'Promptness in reporting to work' },
+  { key: 'overallPerformance', label: 'Overall performance' },
 ];
 const EVALUATION_KEYS = EVALUATION_ITEMS.map(i => i.key);
 
@@ -116,6 +120,21 @@ async function findCurrentHolders({ scholarshipId, academicYear, term }) {
   return holders;
 }
 
+// The form's other answers: Commendations and Recommendations (required),
+// and whether the scholar continues in the office (true) or grows in
+// another (false). `requireChoice`: the office head must answer it; the
+// AdSO copying a paper form may leave it out. Returns the values or { error }.
+function parseEvaluationAnswers(body, { requireChoice = true } = {}) {
+  const text = v => (typeof v === 'string' ? v.trim().slice(0, 2000) : '');
+  const commendations = text(body?.commendations);
+  const recommendations = text(body?.recommendations);
+  if (!commendations) return { error: 'Write your commendations for the scholar.' };
+  if (!recommendations) return { error: 'Write your recommendations for the scholar.' };
+  const choice = body?.requestAgain;
+  if (typeof choice !== 'boolean' && requireChoice) return { error: 'Choose whether the scholar continues in your office or grows in another office.' };
+  return { commendations, recommendations, ...(typeof choice === 'boolean' ? { requestAgain: choice } : {}) };
+}
+
 // Validates 1–5 scores for every evaluation item. Returns { scores, average }
 // or { error }.
 function parseEvaluationScores(raw) {
@@ -143,5 +162,6 @@ module.exports = {
   findHolders,
   findCurrentHolders,
   parseEvaluationScores,
+  parseEvaluationAnswers,
   academicYearLabel,
 };

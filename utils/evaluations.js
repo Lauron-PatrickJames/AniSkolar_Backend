@@ -91,7 +91,7 @@ async function officeEvaluations(office) {
         completed: s?.completed ?? 0,
         required: s?.required ?? null,
         waitingHours: s?.waitingHours ?? 0,
-        evaluation: l.evaluation?.average ? { scores: l.evaluation.scores, average: l.evaluation.average, remarks: l.evaluation.remarks ?? null, enteredAt: l.evaluation.enteredAt, source: l.evaluation.source ?? null } : null,
+        evaluation: l.evaluation?.average ? { scores: l.evaluation.scores, average: l.evaluation.average, remarks: l.evaluation.remarks ?? null, commendations: l.evaluation.commendations ?? null, recommendations: l.evaluation.recommendations ?? null, enteredAt: l.evaluation.enteredAt, source: l.evaluation.source ?? null, requestAgain: l.evaluation.requestAgain ?? null } : null,
         locked: decided.has(`${l.studentNumber}|${l.academicYear}|${l.term}`),
       };
     }).sort((a, b) => ['ready', 'in_progress', 'done'].indexOf(a.state) - ['ready', 'in_progress', 'done'].indexOf(b.state) || a.name.localeCompare(b.name)),

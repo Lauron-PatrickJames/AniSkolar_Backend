@@ -45,10 +45,16 @@ const evaluationSchema = new mongoose.Schema({
   average: Number,
   evaluatorName: { type: String, trim: true, maxlength: 200 },
   assignedOffice: { type: String, trim: true, maxlength: 200 },
-  remarks: { type: String, trim: true, maxlength: 2000 },
+  remarks: { type: String, trim: true, maxlength: 2000 },   // before Commendations / Recommendations
+  commendations: { type: String, trim: true, maxlength: 2000 },
+  recommendations: { type: String, trim: true, maxlength: 2000 },
   enteredBy: String,
   enteredAt: Date,
   source: { type: String, enum: ['office', 'adso'] },
+  // The form's "continue in our office" (true) or "let them grow in another
+  // office" (false); true makes the AdSO's Random assign place them there
+  // first next term when it has room.
+  requestAgain: Boolean,
 }, { _id: false });
 
 const specialEventSchema = new mongoose.Schema({

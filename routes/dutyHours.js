@@ -10,7 +10,7 @@ const DutySetting = require('../models/DutySetting');
 const DutyEvent = require('../models/DutyEvent');
 const { norm, officesWithHeads } = require('../utils/offices');
 const Student = require('../models/Student');
-const { findCurrentHolders } = require('../utils/renewals');
+const { findCurrentHolders, previousTerm } = require('../utils/renewals');
 const { summarize, parseLog, currentTerm, todayInManila, isValidDate } = require('../utils/dutyHours');
 const multer = require('multer');
 const { attendanceSheetUpload } = require('../middleware/uploadConfig');
@@ -175,7 +175,7 @@ function scholarLogView(log, today, rule, eventsById, headOffices) {
 }
 
 function scholarEvaluation(e) {
-  return { scores: e.scores, average: e.average, remarks: e.remarks ?? null, evaluatorName: e.evaluatorName ?? null, assignedOffice: e.assignedOffice ?? null, enteredAt: e.enteredAt ?? null };
+  return { scores: e.scores, average: e.average, remarks: e.remarks ?? null, commendations: e.commendations ?? null, recommendations: e.recommendations ?? null, evaluatorName: e.evaluatorName ?? null, assignedOffice: e.assignedOffice ?? null, enteredAt: e.enteredAt ?? null };
 }
 
 router.get('/mine', requireSfagScholar, async (req, res) => {
@@ -286,11 +286,14 @@ router.get('/admin', requireAdso, async (req, res) => {
     const { value: term, error } = parseTerm(req.query);
     if (error) return res.status(400).json({ error });
     const today = todayInManila();
-    const [holders, logs, offices] = await Promise.all([
+    const [holders, logs, offices, requested] = await Promise.all([
       findCurrentHolders({ scholarshipId: DUTY_SCHOLARSHIP_ID, ...term }),
       DutyLog.find(term).lean(),
       DutyLog.distinct('officeAssigned'),
+      // Last term's offices that asked for their scholar again (evaluation).
+      DutyLog.find({ ...previousTerm(term), 'evaluation.requestAgain': true }).select('studentNumber officeAssigned').lean(),
     ]);
+    const requestedBy = new Map(requested.filter(l => l.officeAssigned).map(l => [l.studentNumber, l.officeAssigned]));
     const sfagLoggers = await everSfag(logs.map(l => l.studentNumber).filter(n => !holders.has(n)));
     const logByStudent = new Map(logs.filter(l => holders.has(l.studentNumber) || sfagLoggers.has(l.studentNumber)).map(l => [l.studentNumber, l]));
     const studentNumbers = [...new Set([...holders, ...logByStudent.keys()])];
@@ -322,6 +325,8 @@ router.get('/admin', requireAdso, async (req, res) => {
         requiredHoursFromAdso: rule?.requiredHours ?? null,
         yearGroup: rule?.yearGroup ?? null,
         pendingClaims: view ? view.claims.filter(c => c.status === 'Pending').length : 0,
+        // The office that asked for this scholar again last term, if any.
+        requestedBy: requestedBy.get(studentNumber) ?? null,
         updatedAt: log?.updatedAt ?? null,
       };
     });

@@ -10,7 +10,7 @@ const { requireScholar } = require('../middleware/requireStudent');
 const { storeFilesInGridFS } = require('../utils/gridfs');
 const { scopedOffice } = require('../utils/officeScope');
 const { findScholarship, acceptsOnlineApplications } = require('../data/scholarships');
-const { findHolders, parseEvaluationScores, previousTerm, PASSING_AVERAGE } = require('../utils/renewals');
+const { findHolders, parseEvaluationScores, parseEvaluationAnswers, previousTerm, PASSING_AVERAGE } = require('../utils/renewals');
 const DutyLog = require('../models/DutyLog');
 const { listOffices, norm, officesWithHeads } = require('../utils/offices');
 const { summariesFor, stateOf } = require('../utils/evaluations');
@@ -563,6 +563,9 @@ router.patch('/admin/:id/evaluation', requireAdmin, async (req, res) => {
     const body = req.body || {};
     const { scores, average, error } = parseEvaluationScores(body.scores);
     if (error) return res.status(400).json({ error });
+    // Copied from the head's form; the continue / transfer answer is optional here.
+    const answers = parseEvaluationAnswers(body, { requireChoice: false });
+    if (answers.error) return res.status(400).json({ error: answers.error });
     const text = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '') || undefined;
     // The evaluating office defaults to the scholar's duty office for the
     // term being evaluated.
@@ -573,7 +576,9 @@ router.patch('/admin/:id/evaluation', requireAdmin, async (req, res) => {
       average,
       evaluatorName: text(body.evaluatorName, 200),
       assignedOffice: dutyOffice || undefined,
-      remarks: text(body.remarks, 2000),
+      commendations: answers.commendations,
+      recommendations: answers.recommendations,
+      ...(answers.requestAgain !== undefined ? { requestAgain: answers.requestAgain } : {}),
       enteredBy: req.adminUser.email,
       enteredAt: new Date(),
       source: 'adso',

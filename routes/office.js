@@ -8,7 +8,7 @@ const RenewalPeriod = require('../models/RenewalPeriod');
 const Renewal = require('../models/Renewal');
 const { findScholarship } = require('../data/scholarships');
 const { summarize, currentTerm, todayInManila, entryHours } = require('../utils/dutyHours');
-const { findHolders, findCurrentHolders, parseEvaluationScores, previousTerm, EVALUATION_ITEMS, PASSING_AVERAGE } = require('../utils/renewals');
+const { findHolders, findCurrentHolders, parseEvaluationScores, parseEvaluationAnswers, previousTerm, EVALUATION_ITEMS, PASSING_AVERAGE } = require('../utils/renewals');
 const { norm } = require('../utils/offices');
 const { queueEmails, processOutbox } = require('../utils/outbox');
 const { officeEvaluations, notifyIfReady, summariesFor, stateOf, nextTerm } = require('../utils/evaluations');
@@ -24,7 +24,7 @@ const { renderEmail } = require('../utils/emailTemplate');
 //   PATCH /api/office/scholars/:studentNumber/entries        { academicYear, term, entryIds, status: 'confirmed' | 'flagged' | null, note }
 //   GET   /api/office/evaluations                            this and last term's scholars with their
 //                                                            evaluation state (in_progress / ready / done)
-//   PUT   /api/office/evaluations/:studentNumber             { academicYear, term, scores, remarks }
+//   PUT   /api/office/evaluations/:studentNumber             { academicYear, term, scores, commendations, recommendations, requestAgain }
 //                                                            once the scholar's hours are complete
 //   GET   /api/office/announcements                          what this office posted
 //   POST  /api/office/announcements                          { title, content, email } to the scholars
@@ -208,6 +208,8 @@ router.put('/evaluations/:studentNumber', requireOfficeHead, async (req, res) =>
     if (termError || body.academicYear === undefined) return res.status(400).json({ error: termError || 'Choose the term.' });
     const { scores, average, error } = parseEvaluationScores(body.scores);
     if (error) return res.status(400).json({ error });
+    const answers = parseEvaluationAnswers(body);
+    if (answers.error) return res.status(400).json({ error: answers.error });
     const log = await findOfficeLog(req, term);
     if (!log) return res.status(404).json({ error: 'This scholar didn’t render duty in your office that term.' });
     const summary = (await summariesFor([log])).get(String(log._id));
@@ -225,7 +227,10 @@ router.put('/evaluations/:studentNumber', requireOfficeHead, async (req, res) =>
       average,
       evaluatorName: req.officeHead.name,
       assignedOffice: log.officeAssigned,
-      remarks: typeof body.remarks === 'string' ? body.remarks.trim().slice(0, 2000) || undefined : undefined,
+      commendations: answers.commendations,
+      recommendations: answers.recommendations,
+      // Continue in this office (true) or grow in another (false).
+      requestAgain: answers.requestAgain,
       enteredBy: req.officeHead.email,
       enteredAt: new Date(),
       source: 'office',
@@ -235,7 +240,7 @@ router.put('/evaluations/:studentNumber', requireOfficeHead, async (req, res) =>
       renewal.evaluation = evaluation;
       await renewal.save();
     }
-    res.json({ evaluation: { scores, average, remarks: evaluation.remarks ?? null, enteredAt: evaluation.enteredAt, source: 'office' } });
+    res.json({ evaluation: { scores, average, remarks: null, commendations: evaluation.commendations, recommendations: evaluation.recommendations, enteredAt: evaluation.enteredAt, source: 'office', requestAgain: evaluation.requestAgain } });
   } catch (err) {
     console.error('Save office evaluation error:', err);
     res.status(500).json({ error: 'Failed to save the evaluation.' });

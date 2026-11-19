@@ -37,11 +37,15 @@ const evaluationSchema = new mongoose.Schema({
   average: Number,
   evaluatorName: { type: String, trim: true, maxlength: 200 },
   assignedOffice: { type: String, trim: true, maxlength: 200 },
-  remarks: { type: String, trim: true, maxlength: 2000 },
+  remarks: { type: String, trim: true, maxlength: 2000 },   // before Commendations / Recommendations
+  commendations: { type: String, trim: true, maxlength: 2000 },
+  recommendations: { type: String, trim: true, maxlength: 2000 },
   enteredBy: String,
   enteredAt: Date,
   // 'office' = entered by the office head in the office portal.
   source: { type: String, enum: ['office', 'adso'] },
+  // Continue in the office (true) or grow in another (false); see DutyLog.
+  requestAgain: Boolean,
 }, { _id: false });
 
 const renewalSchema = new mongoose.Schema({
