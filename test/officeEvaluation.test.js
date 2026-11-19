@@ -1,6 +1,6 @@
 // The office head's evaluation (npm test), as on the office's form: 19
 // items, Commendations, Recommendations, and "continue in our office" or
-// "grow in another office" (which Random assign uses next term).
+// "transfer to another office" (which Random assign uses next term).
 const { test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { users, clerkUser, query, app, call } = require('./helpers');
@@ -44,7 +44,7 @@ test('"Continue in our office": saved with the commendations and recommendations
   assert.equal(saved.average, 5);
 });
 
-test('"Let them grow in another office" is saved as false', async () => {
+test('"Transfer to another office" is saved as false', async () => {
   const res = await evaluate({ ...ANSWERS, requestAgain: false });
   assert.equal(res.status, 200, res.body.error);
   assert.equal(saved.requestAgain, false);
@@ -62,4 +62,18 @@ test('all 19 items must be rated', async () => {
   const { overallPerformance, ...fifteenPlus } = scores;
   const res = await call(a, 'PUT', '/api/office/evaluations/202399001', { user: 'head', body: { academicYear: 2026, term: '1st Semester', scores: fifteenPlus, ...ANSWERS, requestAgain: true } });
   assert.equal(res.status, 400);
+});
+
+test('scholars see only the comments, never the ratings or average', () => {
+  const { studentEvaluation } = require('../utils/renewals');
+  const shown = studentEvaluation({
+    scores, average: 4.2, requestAgain: false, commendations: 'Diligent.', recommendations: 'Speak up more.',
+    evaluatorName: 'Test Head', assignedOffice: 'Information Technology Department', enteredBy: 'itd@dlsud.edu.ph', source: 'office',
+  });
+  assert.deepEqual(Object.keys(shown).sort(), ['assignedOffice', 'commendations', 'enteredAt', 'evaluatorName', 'recommendations', 'remarks']);
+  assert.equal(shown.commendations, 'Diligent.');
+  // The AdSO's remarks on a paper evaluation were staff notes.
+  assert.equal(studentEvaluation({ scores, average: 4, remarks: 'Staff note', source: 'adso' }).remarks, null);
+  assert.equal(studentEvaluation({ scores, average: 4, remarks: 'Good job', source: 'office' }).remarks, 'Good job');
+  assert.equal(studentEvaluation(null), null);
 });

@@ -120,6 +120,23 @@ async function findCurrentHolders({ scholarshipId, academicYear, term }) {
   return holders;
 }
 
+// The evaluation as the scholar sees it: the head's written comments, who
+// and when, never the ratings, the average, or the continue / transfer
+// answer (staff only). Remarks show only when the head wrote them (the
+// AdSO's remarks on a paper evaluation were staff notes). null when there's
+// no evaluation.
+function studentEvaluation(e) {
+  if (!e?.average) return null;
+  return {
+    commendations: e.commendations ?? null,
+    recommendations: e.recommendations ?? null,
+    remarks: e.source === 'office' ? e.remarks ?? null : null,
+    evaluatorName: e.evaluatorName ?? null,
+    assignedOffice: e.assignedOffice ?? null,
+    enteredAt: e.enteredAt ?? null,
+  };
+}
+
 // The form's other answers: Commendations and Recommendations (required),
 // and whether the scholar continues in the office (true) or grows in
 // another (false). `requireChoice`: the office head must answer it; the
@@ -131,7 +148,7 @@ function parseEvaluationAnswers(body, { requireChoice = true } = {}) {
   if (!commendations) return { error: 'Write your commendations for the scholar.' };
   if (!recommendations) return { error: 'Write your recommendations for the scholar.' };
   const choice = body?.requestAgain;
-  if (typeof choice !== 'boolean' && requireChoice) return { error: 'Choose whether the scholar continues in your office or grows in another office.' };
+  if (typeof choice !== 'boolean' && requireChoice) return { error: 'Choose whether the scholar continues in your office or transfers to another office.' };
   return { commendations, recommendations, ...(typeof choice === 'boolean' ? { requestAgain: choice } : {}) };
 }
 
@@ -163,5 +180,6 @@ module.exports = {
   findCurrentHolders,
   parseEvaluationScores,
   parseEvaluationAnswers,
+  studentEvaluation,
   academicYearLabel,
 };

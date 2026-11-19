@@ -174,9 +174,8 @@ function scholarLogView(log, today, rule, eventsById, headOffices) {
   };
 }
 
-function scholarEvaluation(e) {
-  return { scores: e.scores, average: e.average, remarks: e.remarks ?? null, commendations: e.commendations ?? null, recommendations: e.recommendations ?? null, evaluatorName: e.evaluatorName ?? null, assignedOffice: e.assignedOffice ?? null, enteredAt: e.enteredAt ?? null };
-}
+// Comments only, no ratings (utils/renewals.js studentEvaluation).
+const scholarEvaluation = e => require('../utils/renewals').studentEvaluation(e);
 
 router.get('/mine', requireSfagScholar, async (req, res) => {
   try {

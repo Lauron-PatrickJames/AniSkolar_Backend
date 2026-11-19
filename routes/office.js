@@ -229,7 +229,7 @@ router.put('/evaluations/:studentNumber', requireOfficeHead, async (req, res) =>
       assignedOffice: log.officeAssigned,
       commendations: answers.commendations,
       recommendations: answers.recommendations,
-      // Continue in this office (true) or grow in another (false).
+      // Continue in this office (true) or transfer to another (false).
       requestAgain: answers.requestAgain,
       enteredBy: req.officeHead.email,
       enteredAt: new Date(),

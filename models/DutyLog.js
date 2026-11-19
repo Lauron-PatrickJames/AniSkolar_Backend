@@ -51,7 +51,7 @@ const evaluationSchema = new mongoose.Schema({
   enteredBy: String,
   enteredAt: Date,
   source: { type: String, enum: ['office', 'adso'] },
-  // The form's "continue in our office" (true) or "let them grow in another
+  // The form's "continue in our office" (true) or "transfer to another
   // office" (false); true makes the AdSO's Random assign place them there
   // first next term when it has room.
   requestAgain: Boolean,

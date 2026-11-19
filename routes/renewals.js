@@ -10,7 +10,7 @@ const { requireScholar } = require('../middleware/requireStudent');
 const { storeFilesInGridFS } = require('../utils/gridfs');
 const { scopedOffice } = require('../utils/officeScope');
 const { findScholarship, acceptsOnlineApplications } = require('../data/scholarships');
-const { findHolders, parseEvaluationScores, parseEvaluationAnswers, previousTerm, PASSING_AVERAGE } = require('../utils/renewals');
+const { findHolders, parseEvaluationScores, parseEvaluationAnswers, studentEvaluation, previousTerm, PASSING_AVERAGE } = require('../utils/renewals');
 const DutyLog = require('../models/DutyLog');
 const { listOffices, norm, officesWithHeads } = require('../utils/offices');
 const { summariesFor, stateOf } = require('../utils/evaluations');
@@ -62,16 +62,13 @@ function isObjectId(id) {
   return mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === id;
 }
 
-// Scholars see the department head's evaluation on their renewal (scores,
-// remarks, who and when), without the staff email that entered it.
+// Scholars see the department head's comments on their renewal (who and
+// when), never the ratings or average (utils/renewals.js studentEvaluation).
 function toStudentView(renewal) {
   const obj = renewal.toObject ? renewal.toObject() : { ...renewal };
-  if (obj.evaluation?.average) {
-    const { enteredBy, source, ...shown } = obj.evaluation;
-    obj.evaluation = shown;
-  } else {
-    delete obj.evaluation;
-  }
+  const shown = studentEvaluation(obj.evaluation);
+  if (shown) obj.evaluation = shown;
+  else delete obj.evaluation;
   delete obj.reviewedBy;
   obj.history = (obj.history || []).map(({ changedBy, changedByName, ...rest }) => ({
     ...rest,

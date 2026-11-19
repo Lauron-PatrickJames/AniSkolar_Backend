@@ -44,7 +44,7 @@ const evaluationSchema = new mongoose.Schema({
   enteredAt: Date,
   // 'office' = entered by the office head in the office portal.
   source: { type: String, enum: ['office', 'adso'] },
-  // Continue in the office (true) or grow in another (false); see DutyLog.
+  // Continue in the office (true) or transfer to another (false); see DutyLog.
   requestAgain: Boolean,
 }, { _id: false });
 
