@@ -294,7 +294,7 @@ router.get('/mine', requireStudent, async (req, res) => {
   try {
     const inbox = studentInbox(req);
     if (!inbox) return res.status(400).json({ error: 'Unknown office.' });
-    const messages = await Message.find({ studentNumber: req.studentNumber, ...inboxOf(inbox) }).sort({ createdAt: 1 }).limit(1000).lean();
+    const messages = await Message.find({ studentNumber: req.studentNumber, ...inboxOf(inbox) }).sort({ createdAt: 1, _id: 1 }).limit(1000).lean();
     res.json({ messages: messages.map(view) });
   } catch (err) {
     console.error('Load messages error:', err);
@@ -636,7 +636,7 @@ router.get('/admin/threads/:studentNumber', requireAdmin, async (req, res) => {
     if (!student) return res.status(404).json({ error: 'Student not found.' });
     const st = await MessageThread.findOne(stateKey('student', student.studentNumber, inbox)).lean();
     const [messages, applications] = await Promise.all([
-      Message.find({ studentNumber: student.studentNumber, ...inboxOf(inbox), ...afterDeleted(st) }).sort({ createdAt: 1 }).limit(1000).lean(),
+      Message.find({ studentNumber: student.studentNumber, ...inboxOf(inbox), ...afterDeleted(st) }).sort({ createdAt: 1, _id: 1 }).limit(1000).lean(),
       // Only the applications this office can see.
       Application.find({ studentNumber: student.studentNumber, ...officeFilter(req.adminUser) }).select('_id referenceCode scholarshipName status').sort({ createdAt: -1 }).lean(),
     ]);
@@ -747,7 +747,7 @@ router.get('/admin/peers/:code', requireAdmin, async (req, res) => {
     const other = findPeer(req, req.params.code);
     if (!other) return res.status(404).json({ error: 'Office not found.' });
     const st = await MessageThread.findOne(stateKey('peer', other, me)).lean();
-    const messages = await Message.find({ peer: pairKey(me, other), ...afterDeleted(st) }).sort({ createdAt: 1 }).limit(1000).lean();
+    const messages = await Message.find({ peer: pairKey(me, other), ...afterDeleted(st) }).sort({ createdAt: 1, _id: 1 }).limit(1000).lean();
     res.json({ office: { code: other, name: officeLabel(other), short: officeShort(other) }, messages: messages.map(m => peerView(m, me)), state: stateView(st) });
   } catch (err) {
     console.error('Load peer thread error:', err);
@@ -837,7 +837,7 @@ router.get('/admin/offices/:office', requireAdso, async (req, res) => {
     const office = await findOffice(req.params.office);
     if (!office) return res.status(404).json({ error: 'Office not found.' });
     const st = await MessageThread.findOne({ kind: 'office', key: office.office }).lean();
-    const messages = await Message.find({ office: office.office, ...afterDeleted(st) }).sort({ createdAt: 1 }).limit(1000).lean();
+    const messages = await Message.find({ office: office.office, ...afterDeleted(st) }).sort({ createdAt: 1, _id: 1 }).limit(1000).lean();
     res.json({ office: { office: office.office, headName: office.headName ?? '', headEmail: office.headEmail ?? '' }, messages: messages.map(view), state: stateView(st) });
   } catch (err) {
     console.error('Load office thread error:', err);
@@ -906,7 +906,7 @@ router.delete('/admin/offices/:office', requireAdso, async (req, res) => {
 
 router.get('/office/mine', requireOfficeHead, async (req, res) => {
   try {
-    const messages = await Message.find({ office: req.officeHead.office }).sort({ createdAt: 1 }).limit(1000).lean();
+    const messages = await Message.find({ office: req.officeHead.office }).sort({ createdAt: 1, _id: 1 }).limit(1000).lean();
     res.json({ messages: messages.map(view) });
   } catch (err) {
     console.error('Load office messages error:', err);

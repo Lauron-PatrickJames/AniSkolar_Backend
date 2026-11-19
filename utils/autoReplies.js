@@ -51,11 +51,16 @@ function parseSettings(body) {
   return { value: { welcome, away, faqs } };
 }
 
-const autoMessage = (inbox, studentNumber, kind, body, now) => Message.create({
-  studentNumber, inbox, from: 'adso', auto: kind, body,
-  authorName: `${shortName(inbox)} · automatic reply`,
-  createdAt: new Date(now.getTime() + 1), updatedAt: new Date(now.getTime() + 1),
-});
+// The reply is timed just after the message it answers (`after`), so it
+// always comes right below it, never above.
+const autoMessage = (inbox, studentNumber, kind, body, after) => {
+  const at = new Date(Math.max(Date.now(), new Date(after?.createdAt ?? 0).getTime() + 1));
+  return Message.create({
+    studentNumber, inbox, from: 'adso', auto: kind, body,
+    authorName: `${shortName(inbox)} · automatic reply`,
+    createdAt: at, updatedAt: at,
+  });
+};
 
 // A typed message that asks one of the quick questions (panel, Nov 2026):
 // the words that matter (not "the", "how", "po"…) mostly the same as the
@@ -85,18 +90,18 @@ async function replyAfter(inbox, studentNumber, sent, now = new Date()) {
   const settings = await AutoReply.findById(inbox).lean();
   if (!settings) return [];
   const faq = matchFaq(sent.body, settings.faqs);
-  if (faq) return [await autoMessage(inbox, studentNumber, 'faq', faq.answer, now)];
+  if (faq) return [await autoMessage(inbox, studentNumber, 'faq', faq.answer, sent)];
   if (!settings.welcome?.enabled && !settings.away?.enabled) return [];
   const thread = { studentNumber, ...inboxOf(inbox), _id: { $ne: sent._id } };
   if (settings.away?.enabled && (settings.away.mode === 'always' || !inOfficeHours(now))) {
     const recent = await Message.exists({ ...thread, auto: 'away', createdAt: { $gt: new Date(now.getTime() - AWAY_EVERY_MS) } });
-    if (!recent) return [await autoMessage(inbox, studentNumber, 'away', settings.away.text, now)];
+    if (!recent) return [await autoMessage(inbox, studentNumber, 'away', settings.away.text, sent)];
     return [];
   }
   if (settings.welcome?.enabled) {
     const previous = await Message.findOne(thread).sort({ createdAt: -1 }).select('createdAt').lean();
     if (!previous || now.getTime() - new Date(previous.createdAt).getTime() > WELCOME_AFTER_MS) {
-      return [await autoMessage(inbox, studentNumber, 'welcome', settings.welcome.text, now)];
+      return [await autoMessage(inbox, studentNumber, 'welcome', settings.welcome.text, sent)];
     }
   }
   return [];
@@ -115,7 +120,7 @@ async function askQuickQuestion(inbox, student, faqId, now = new Date()) {
   const faq = (settings?.faqs ?? []).find(f => String(f._id) === String(faqId));
   if (!faq) return null;
   const question = await Message.create({ studentNumber: student.studentNumber, inbox, from: 'student', authorEmail: student.email, authorName: student.name, body: faq.question, readAt: now });
-  const answer = await autoMessage(inbox, student.studentNumber, 'faq', faq.answer, now);
+  const answer = await autoMessage(inbox, student.studentNumber, 'faq', faq.answer, question);
   return [question, answer];
 }
 
