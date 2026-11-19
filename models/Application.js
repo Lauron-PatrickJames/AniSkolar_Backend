@@ -126,7 +126,9 @@ const applicationSchema = new mongoose.Schema({
   endedAt: Date,
   // 'Declined': the student had two scholarships approved and kept the
   // other one (POST /api/students/me/holdings/choose).
-  endReason: { type: String, enum: ['Graduated', 'Stopped', 'Declined'] },
+  // 'Not Renewed': the office didn't renew it (routes/renewals.js), so the
+  // student is no longer a scholar (no renewals, no duty hours).
+  endReason: { type: String, enum: ['Graduated', 'Stopped', 'Declined', 'Not Renewed'] },
   endedBy: String,
 
   // Set when a POLCA / Alumni office approves the application, which sends

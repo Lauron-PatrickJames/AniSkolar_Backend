@@ -58,6 +58,18 @@ const dutySettingSchema = new mongoose.Schema({
   deadlines: { type: [termDeadlineSchema], default: undefined },
   // The duty evaluation average a renewal needs (1–5); unset = 4.
   passingAverage: { type: Number, min: 1, max: 5 },
+  // Office heads on leave (panel, Nov 2026), by office (normalized name,
+  // utils/offices.js norm). While a head is on leave their scholars'
+  // duties don't expire; when they're back (endedAt) the 48 hours start
+  // again (utils/dutyExpiry.js). Kept apart from officeSlots, which the
+  // AdSO replaces when it saves the offices.
+  leaves: { type: [new mongoose.Schema({
+    office: { type: String, required: true },
+    since: Date,
+    returnsOn: String,     // YYYY-MM-DD, optional
+    endedAt: Date,         // unset = still on leave
+    setBy: String,
+  }, { _id: false })], default: undefined },
   updatedBy: String,
 }, { timestamps: true });
 
@@ -73,7 +85,14 @@ dutySettingSchema.statics.current = async function current() {
     g,
     Object.fromEntries(GRANT_PERCENTAGES.map(p => [p, saved[g]?.[key(p)] ?? null])),
   ]));
-  return { hoursByGroup, officeSlots: doc?.officeSlots ?? [], deadlines: doc?.deadlines ?? [], passingAverage: doc?.passingAverage ?? DEFAULT_PASSING_AVERAGE, updatedBy: doc?.updatedBy ?? null, updatedAt: doc?.updatedAt ?? null };
+  // Each office with its head's leave, if they're on leave now.
+  const onLeave = new Map((doc?.leaves ?? []).filter(l => !l.endedAt).map(l => [l.office, l]));
+  const normName = name => String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const officeSlots = (doc?.officeSlots ?? []).map(o => {
+    const leave = onLeave.get(normName(o.office));
+    return leave ? { ...o, headOnLeave: { since: leave.since ?? null, returnsOn: leave.returnsOn ?? null } } : o;
+  });
+  return { hoursByGroup, officeSlots, deadlines: doc?.deadlines ?? [], passingAverage: doc?.passingAverage ?? DEFAULT_PASSING_AVERAGE, updatedBy: doc?.updatedBy ?? null, updatedAt: doc?.updatedAt ?? null };
 };
 
 // The evaluation average renewals need (the AdSO's, or 4).

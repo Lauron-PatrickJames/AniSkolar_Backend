@@ -222,12 +222,14 @@ function validateGrantSubmission(scholarship, body, presentSlotKeys) {
 // confirmation, an optional supporting document, and for the SFAG the
 // grant percentage (`sfagPercentage`).
 // GET /api/applications/direct-award/students?q= — students to pick from.
-// Who can add scholars: the SDO and the ROTC Office (their scholarships
-// have no application), and the AdSO's Scholarship Associate, Head and
-// Director (publicMetadata.adsoRole in Clerk). No other office.
+// Who can add scholars: the members-only offices (SDO, ROTC, Vicissitude,
+// Heraldo Filipino: their scholarships have no application), and the
+// AdSO's Scholarship Associate, Head and Director (publicMetadata.adsoRole
+// in Clerk). No other office.
+const MEMBER_OFFICES = ['SDO', 'ROTC', 'VICISSITUDE', 'HERALDO'];
 const canAddScholars = adminUser =>
-  ['SDO', 'ROTC'].includes(adminUser?.office) || (adminUser?.office === 'LSO' && !!adminUser.adsoRole);
-const ADD_SCHOLAR_DENIED = 'Only the AdSO’s Scholarship Associate, Head and Director, the SDO and the ROTC Office can add scholars.';
+  MEMBER_OFFICES.includes(adminUser?.office) || (adminUser?.office === 'LSO' && !!adminUser.adsoRole);
+const ADD_SCHOLAR_DENIED = 'Only the AdSO’s Scholarship Associate, Head and Director and the members-only offices (SDO, ROTC, Vicissitude, Heraldo Filipino) can add scholars.';
 const directAwardScholarship = (adminUser, scholarshipId) => {
   if (!canAddScholars(adminUser)) return null;
   const scholarship = findScholarship(scholarshipId);
@@ -387,6 +389,118 @@ router.post('/direct-award', requireAdmin, (req, res) => {
       res.status(500).json({ error: 'Failed to add the scholar.' });
     }
   });
+});
+
+// POST /api/applications/direct-award/bulk — a members-only office
+// (MEMBER_OFFICES) uploads its member list and each one becomes a scholar
+// (panel, Nov 2026): JSON { scholarshipId, members: [{ studentNumber,
+// firstName?, lastName?, email? }], approved: true, note? }. No form and no
+// document per member: the office confirms once that the list is approved.
+// Members who haven't signed in yet need a name and a DLSU-D email (like
+// adding one). Members who are already current scholars are skipped, not
+// refused, so the same list can be uploaded again each term. Holding another
+// internal scholarship doesn't stop them (they choose later, as usual).
+// Returns { added: [studentNumber], skipped: [{ studentNumber, reason }] }.
+const MAX_BULK_MEMBERS = 500;
+router.post('/direct-award/bulk', requireAdmin, async (req, res) => {
+  try {
+    if (!MEMBER_OFFICES.includes(req.adminUser?.office)) return res.status(403).json({ error: 'Only the members-only offices (SDO, ROTC, Vicissitude, Heraldo Filipino) can upload a member list.' });
+    const scholarship = directAwardScholarship(req.adminUser, req.body?.scholarshipId);
+    if (!scholarship || !scholarship.directAward) return res.status(403).json({ error: 'Only the office that handles this scholarship can add its scholars.' });
+    const award = OFFICE_FORMS[scholarship.id]?.award || { who: 'member', approver: 'office head', note: 'Added by the office.' };
+    if (req.body.approved !== true) return res.status(400).json({ error: `Confirm the ${award.approver} approved the list.` });
+    const rows = Array.isArray(req.body.members) ? req.body.members : [];
+    if (!rows.length) return res.status(400).json({ error: 'The list has no members.' });
+    if (rows.length > MAX_BULK_MEMBERS) return res.status(400).json({ error: `Upload at most ${MAX_BULK_MEMBERS} members at a time.` });
+    const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 2000) : '';
+    const text = v => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, 100) : '');
+
+    const numbers = [...new Set(rows.map(r => text(r?.studentNumber)).filter(n => /^\d{9}$/.test(n)))];
+    const students = new Map((await Student.find({ studentNumber: { $in: numbers } }).lean()).map(s => [s.studentNumber, s]));
+    const current = await Application.find({ studentNumber: { $in: numbers }, scholarshipId: scholarship.id, status: 'Approved', endedAt: null }).select('studentNumber reviewedAt createdAt').lean();
+    const now = new Date();
+    const already = new Set(current.filter(a => !scholarship.oneSemester || now < semesterEnd(a.reviewedAt || a.createdAt)).map(a => a.studentNumber));
+
+    const added = [];
+    const skipped = [];
+    const seen = new Set();
+    const by = req.adminUser.email;
+    const office = require('../data/offices').OFFICE_NAMES[scholarship.office] ?? 'the scholarship office';
+    const appUrl = process.env.APP_URL || (process.env.FRONTEND_ORIGINS || '').split(',')[0].trim() || 'http://localhost:3000';
+    const emails = [];
+    for (const row of rows) {
+      const studentNumber = text(row?.studentNumber);
+      if (!/^\d{9}$/.test(studentNumber)) { skipped.push({ studentNumber, reason: 'Not a 9-digit student number.' }); continue; }
+      if (seen.has(studentNumber)) { skipped.push({ studentNumber, reason: 'Listed twice.' }); continue; }
+      seen.add(studentNumber);
+      if (already.has(studentNumber)) { skipped.push({ studentNumber, reason: `Already a scholar${scholarship.oneSemester ? ' this semester' : ''}.` }); continue; }
+      let student = students.get(studentNumber);
+      if (!student) {
+        const firstName = text(row.firstName);
+        const lastName = text(row.lastName);
+        const email = text(row.email).toLowerCase();
+        if (!firstName || !lastName || !/^[^\s@]+@dlsud\.edu\.ph$/.test(email)) {
+          skipped.push({ studentNumber, reason: 'Not signed in to AniSkolar yet: add their first name, last name and DLSU-D email.' });
+          continue;
+        }
+        student = { studentNumber, firstName, lastName, middleName: '', name: `${firstName} ${lastName}`.toUpperCase(), email, pending: true };
+      }
+      const application = await Application.create({
+        studentNumber,
+        scholarshipId: scholarship.id,
+        scholarshipName: scholarship.name,
+        office: scholarship.office,
+        applicationFormType: 'standard',
+        documents: [],
+        referenceCode: await nextReferenceCode(scholarship),
+        standardInfo: {
+          firstName: student.firstName || '', middleName: student.middleName || '', lastName: student.lastName || '',
+          email: student.email || '', phone: student.mobileNumber || '', studentNumber,
+          program: student.programCode || '', yearLevel: student.yearLevel || '',
+        },
+        awardedDirectly: true,
+        status: 'Approved',
+        decisionOffice: scholarship.office,
+        reviewNote: note || undefined,
+        reviewedBy: by,
+        reviewedAt: now,
+        forwardedAt: now,
+        forwardedBy: by,
+        history: [
+          { status: 'Approved', note: note || `${award.note} (member list)`, changedBy: by, changedByName: req.adminUser.name, changedByOffice: req.adminUser.office, changedAt: now },
+          { status: 'Forwarded to LSO', changedBy: 'system', changedByOffice: scholarship.office, changedAt: now },
+        ],
+      });
+      if (!student.pending) {
+        await stampStudentNames(studentNumber, application);
+        application.markModified('standardInfo');
+        await application.save();
+      }
+      added.push(studentNumber);
+      if (student.email) {
+        const { html, text: plain } = renderEmail({
+          heading: `You're a ${scholarship.name} scholar`,
+          intro: `The ${office.replace(/^the /i, '')} added you as a scholar.`,
+          body: [
+            `Hi ${require('../utils/names').properName(student.firstName) || 'there'},`,
+            '',
+            `You've been granted the ${scholarship.name}${note ? `:\n\n${note}` : '.'}`,
+            '',
+            student.pending
+              ? 'Sign in to AniSkolar with your DLSU-D Microsoft account to see it under My Scholarship.'
+              : 'You can see it in AniSkolar under My Scholarship.',
+          ].join('\n'),
+          button: { url: appUrl, label: 'Open AniSkolar' },
+        });
+        emails.push({ key: `direct-award:${application._id}`, kind: 'directAward', priority: 1, to: student.email, subject: `AniSkolar: you're a ${scholarship.name} scholar`, html, text: plain });
+      }
+    }
+    if (emails.length) queueEmails(emails).then(() => processOutbox()).catch(e => console.error('Member list emails failed:', e));
+    res.status(added.length ? 201 : 200).json({ added, skipped });
+  } catch (e) {
+    console.error('Member list upload error:', e);
+    res.status(500).json({ error: 'Failed to add the members.' });
+  }
 });
 
 // The applicant is always the signed-in student (requireStudent); a
@@ -774,10 +888,12 @@ router.get('/export/scholars', requireAdmin, async (req, res) => {
   try {
     // approved: 'any' | 'yes' (has an approved application) | 'no'.
     const { search = '', renewal = 'all', approved = 'any', sort = 'recent' } = req.query;
+    // One scholarship's scholars only (the Scholars page's filter).
+    const scholarshipId = typeof req.query.scholarshipId === 'string' && req.query.scholarshipId ? req.query.scholarshipId : null;
 
     const pipeline = [
       // Office-scoped admins (e.g. POLCA) only export their own office.
-      { $match: officeFilter(req.adminUser) },
+      { $match: { ...officeFilter(req.adminUser), ...(scholarshipId ? { scholarshipId } : {}) } },
       // Group applications by student first — everything downstream
       // (renewing/first-time, latest status, counts) is a property of the
       // student, not any single application.

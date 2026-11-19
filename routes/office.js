@@ -9,7 +9,7 @@ const Renewal = require('../models/Renewal');
 const { findScholarship } = require('../data/scholarships');
 const { summarize, currentTerm, todayInManila, entryHours } = require('../utils/dutyHours');
 const { findHolders, findCurrentHolders, parseEvaluationScores, parseEvaluationAnswers, previousTerm, EVALUATION_ITEMS, PASSING_AVERAGE } = require('../utils/renewals');
-const { norm } = require('../utils/offices');
+const { norm, officeLeaves, setOfficeLeave } = require('../utils/offices');
 const { queueEmails, processOutbox } = require('../utils/outbox');
 const { officeEvaluations, notifyIfReady, summariesFor, stateOf, nextTerm } = require('../utils/evaluations');
 const { renderEmail } = require('../utils/emailTemplate');
@@ -26,6 +26,8 @@ const { renderEmail } = require('../utils/emailTemplate');
 //                                                            evaluation state (in_progress / ready / done)
 //   PUT   /api/office/evaluations/:studentNumber             { academicYear, term, scores, commendations, recommendations, requestAgain }
 //                                                            once the scholar's hours are complete
+//   PUT   /api/office/leave                                  { onLeave, returnsOn? } the head is away:
+//                                                            their scholars' duties don't expire meanwhile
 //   GET   /api/office/announcements                          what this office posted
 //   POST  /api/office/announcements                          { title, content, email } to the scholars
 //                                                            assigned to it this term (published now)
@@ -55,10 +57,25 @@ function entryView(e) {
 router.get('/me', requireOfficeHead, async (req, res) => {
   try {
     const passingAverage = await require('../models/DutySetting').passingAverage();
-    res.json({ ...req.officeHead, current: currentTerm(), evaluationItems: EVALUATION_ITEMS, passingAverage });
+    const leave = (await officeLeaves()).get(norm(req.officeHead.office)) ?? null;
+    res.json({ ...req.officeHead, current: currentTerm(), evaluationItems: EVALUATION_ITEMS, passingAverage, leave: leave?.onLeave ? leave : null });
   } catch (err) {
     console.error('Load office head error:', err);
     res.status(500).json({ error: 'Failed to load your office.' });
+  }
+});
+
+router.put('/leave', requireOfficeHead, async (req, res) => {
+  try {
+    const onLeave = req.body?.onLeave === true;
+    const returnsOn = typeof req.body?.returnsOn === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.returnsOn) ? req.body.returnsOn : null;
+    if (onLeave && returnsOn && returnsOn < todayInManila()) return res.status(400).json({ error: 'Choose today or a later date.' });
+    await setOfficeLeave(req.officeHead.office, onLeave, { returnsOn, by: req.officeHead.email });
+    const leave = (await officeLeaves()).get(norm(req.officeHead.office)) ?? null;
+    res.json({ leave: leave?.onLeave ? leave : null });
+  } catch (err) {
+    console.error('Office leave error:', err);
+    res.status(500).json({ error: 'Failed to save your leave.' });
   }
 });
 

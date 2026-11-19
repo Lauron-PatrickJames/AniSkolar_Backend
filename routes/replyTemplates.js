@@ -16,13 +16,20 @@ const { CONTEXTS, DECISIONS } = ReplyTemplate;
 const APPLICATION_DECISIONS = ['Approved', 'Rejected', 'Needs Revision'];
 const RENEWAL_DECISIONS = ['Renewed', 'Not Renewed', 'Needs Revision'];
 
+// The approval starter, worded so it can't be mistaken for "we received
+// your application" (panel, Nov 2026). Offices that still have the old
+// wording get the new one (GET /).
+const OLD_APPROVED_BODY = 'Congratulations, {firstName}! Your {scholarship} application ({referenceCode}) has been approved. Please watch your school email and AniSkolar announcements for the orientation schedule.';
+const APPROVED_TITLE = 'Approved: you’re a scholar';
+const APPROVED_BODY = 'Congratulations, {firstName}! The office has reviewed and approved your {scholarship} application ({referenceCode}). You are now a {scholarship} scholar. Next, watch your school email and AniSkolar announcements for the orientation schedule.';
+
 const STARTERS = [
   { context: 'application', decision: 'Needs Revision', title: 'Blurry or unreadable document', body: 'Hi {firstName}, one of your documents for the {scholarship} ({referenceCode}) is blurry or cut off, so we can\'t read it: [which document]. Please upload a clear photo or scan of the whole page and resubmit.' },
   { context: 'application', decision: 'Needs Revision', title: 'Missing document', body: 'Hi {firstName}, your {scholarship} application ({referenceCode}) is missing a required document: [which document]. Please upload it and resubmit.' },
   { context: 'application', decision: 'Needs Revision', title: "Details don't match the documents", body: 'Hi {firstName}, some details in your {scholarship} application ({referenceCode}) don\'t match your documents: [what doesn\'t match]. Please correct them and resubmit.' },
   { context: 'application', decision: 'Rejected', title: 'GPA below the requirement', body: 'Hi {firstName}, thank you for applying for the {scholarship}. We\'re unable to approve your application because your GPA is below the scholarship\'s requirement. You\'re welcome to apply again next cycle.' },
   { context: 'application', decision: 'Rejected', title: 'Slots filled', body: 'Hi {firstName}, thank you for applying for the {scholarship}. All slots for this cycle have been filled, so we\'re unable to approve your application. You\'re welcome to apply again next cycle.' },
-  { context: 'application', decision: 'Approved', title: 'Approved: next steps', body: 'Congratulations, {firstName}! Your {scholarship} application ({referenceCode}) has been approved. Please watch your school email and AniSkolar announcements for the orientation schedule.' },
+  { context: 'application', decision: 'Approved', title: APPROVED_TITLE, body: APPROVED_BODY },
   { context: 'renewal', decision: 'Needs Revision', title: 'Grades unreadable or incomplete', body: 'Hi {firstName}, the grades you uploaded for your {term} renewal are unreadable or incomplete. Please upload a clear copy of the whole document and resubmit.' },
   { context: 'renewal', decision: 'Needs Revision', title: "GPA doesn't match the grades", body: 'Hi {firstName}, the GPA you entered for your {term} renewal doesn\'t match your grades. Please check it and resubmit.' },
   { context: 'renewal', decision: 'Not Renewed', title: 'GPA below the minimum', body: 'Hi {firstName}, we\'re unable to renew your {scholarship} for the {term} because your GPA is below the required minimum. If you have questions, message the office in AniSkolar.' },
@@ -57,6 +64,7 @@ router.get('/', requireAdmin, async (req, res) => {
     if (!(await ReplyTemplate.exists({ office }))) {
       await ReplyTemplate.insertMany(STARTERS.map(t => ({ ...t, office, starter: true, createdBy: 'AniSkolar' })));
     }
+    await ReplyTemplate.updateMany({ office, starter: true, body: OLD_APPROVED_BODY }, { $set: { title: APPROVED_TITLE, body: APPROVED_BODY } });
     const list = await ReplyTemplate.find({ office, deletedAt: null }).sort({ usedCount: -1, title: 1 }).lean();
     res.json({ templates: list.map(view) });
   } catch (err) {

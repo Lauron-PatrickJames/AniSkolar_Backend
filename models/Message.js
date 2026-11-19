@@ -38,6 +38,8 @@ const messageSchema = new mongoose.Schema({
   // Unsent by its writer within 24 hours: its text and files are removed
   // and both sides see "This message was unsent" (routes/messages.js).
   unsentAt: { type: Date, default: null },
+  // Sent by the office's automatic replies (utils/autoReplies.js), not a person.
+  auto: { type: String, enum: ['welcome', 'away', 'faq'] },
 }, { timestamps: true });
 
 messageSchema.index({ studentNumber: 1, createdAt: 1 });

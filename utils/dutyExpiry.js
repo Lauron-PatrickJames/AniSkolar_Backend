@@ -1,13 +1,15 @@
 const DutyLog = require('../models/DutyLog');
 const Student = require('../models/Student');
-const { norm, officesWithHeads } = require('./offices');
+const { norm, officesWithHeads, officeLeaves } = require('./offices');
 const { renderEmail } = require('./emailTemplate');
 const { queueEmails, processOutbox } = require('./outbox');
 
 // Duties the office head hasn't confirmed or flagged within 48 hours of
 // being logged are removed (AdSO, Nov 2026), and the scholar is emailed
 // and sees them on their Duty hours page. Only for offices with a head in
-// AniSkolar: elsewhere nobody confirms duties, so nothing expires.
+// AniSkolar: elsewhere nobody confirms duties, so nothing expires. While
+// the head is on leave nothing expires either; when they're back, the 48
+// hours count from their return (panel, Nov 2026).
 // Runs every 15 minutes from server.js.
 
 const REVIEW_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -29,10 +31,16 @@ async function expireUnreviewedDuties(now = new Date()) {
   if (!logs.length) return 0;
 
   const headOffices = await officesWithHeads();
+  const leaves = await officeLeaves();
   let removed = 0;
   for (const log of logs) {
-    if (!headOffices.has(norm(log.officeAssigned))) continue;
-    const stale = log.entries.filter(e => !e.status && e.loggedAt && new Date(e.loggedAt) <= cutoff);
+    const office = norm(log.officeAssigned);
+    if (!headOffices.has(office)) continue;
+    const leave = leaves.get(office);
+    if (leave?.onLeave) continue;
+    // Back from leave: the window starts again from the return.
+    const back = leave?.endedAt ? new Date(leave.endedAt) : null;
+    const stale = log.entries.filter(e => !e.status && e.loggedAt && new Date(e.loggedAt) <= cutoff && !(back && back > cutoff));
     if (!stale.length) continue;
     const ids = stale.map(e => e._id);
     // Only entries that are still unreviewed (the head may be confirming now).

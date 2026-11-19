@@ -65,7 +65,7 @@ const DUTY_SCHOLARSHIP_ID = SFAG_ID;
 async function everSfag(studentNumbers) {
   if (!studentNumbers.length) return new Set();
   const [approved, renewed] = await Promise.all([
-    Application.distinct('studentNumber', { studentNumber: { $in: studentNumbers }, scholarshipId: SFAG_ID, status: 'Approved' }),
+    Application.distinct('studentNumber', { studentNumber: { $in: studentNumbers }, scholarshipId: SFAG_ID, status: 'Approved', endedAt: null }),
     Renewal.distinct('studentNumber', { studentNumber: { $in: studentNumbers }, scholarshipId: SFAG_ID, status: 'Renewed' }),
   ]);
   return new Set([...approved, ...renewed]);
@@ -177,6 +177,13 @@ function scholarLogView(log, today, rule, eventsById, headOffices) {
 // Comments only, no ratings (utils/renewals.js studentEvaluation).
 const scholarEvaluation = e => require('../utils/renewals').studentEvaluation(e);
 
+async function headLeaveFor(office) {
+  if (!office) return null;
+  const { officeLeaves, norm } = require('../utils/offices');
+  const leave = (await officeLeaves()).get(norm(office));
+  return leave?.onLeave ? { since: leave.since, returnsOn: leave.returnsOn } : null;
+}
+
 router.get('/mine', requireSfagScholar, async (req, res) => {
   try {
     const { value: term, error } = parseTerm(req.query);
@@ -194,6 +201,9 @@ router.get('/mine', requireSfagScholar, async (req, res) => {
       ...scholarLogView(log ?? empty, todayInManila(), rules.get(req.studentNumber), eventsById, await officesWithHeads()),
       // Credited events of the term the scholar can claim.
       events: [...eventsById.values()].map(eventView),
+      // The office head is on leave: duties wait for their return instead
+      // of being removed after 48 hours.
+      headOnLeave: await headLeaveFor(log?.officeAssigned),
     });
   } catch (err) {
     console.error('Load duty log error:', err);

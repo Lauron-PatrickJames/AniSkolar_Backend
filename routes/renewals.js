@@ -17,6 +17,7 @@ const { summariesFor, stateOf } = require('../utils/evaluations');
 const { sendMail } = require('../utils/mailer');
 const { renderEmail } = require('../utils/emailTemplate');
 const Renewal = require('../models/Renewal');
+const Application = require('../models/Application');
 const RenewalPeriod = require('../models/RenewalPeriod');
 const Student = require('../models/Student');
 const { checksForPeriod } = require('../utils/renewalCheck');
@@ -588,6 +589,24 @@ router.patch('/admin/:id/evaluation', requireAdmin, async (req, res) => {
   }
 });
 
+// Not renewed: the scholarship ends (panel, Nov 2026). The application is
+// marked ended ('Not Renewed'), so the student is no longer a scholar: no
+// renewals, no duty hours (SFAG), not counted as holding it. A decision
+// changed back (e.g. to Renewed) reopens it.
+async function endIfNotRenewed(renewal, adminUser, now, previous) {
+  const base = { studentNumber: renewal.studentNumber, scholarshipId: renewal.scholarshipId, status: 'Approved' };
+  if (renewal.status === 'Not Renewed') {
+    const app = await Application.findOne({ ...base, endedAt: null }).sort({ createdAt: -1 });
+    if (!app) return;
+    app.endedAt = now;
+    app.endReason = 'Not Renewed';
+    app.endedBy = adminUser.email;
+    await app.save();
+  } else if (previous === 'Not Renewed') {
+    await Application.updateMany({ ...base, endReason: 'Not Renewed' }, { $unset: { endedAt: 1, endReason: 1, endedBy: 1 } });
+  }
+}
+
 router.patch('/admin/:id/status', requireAdmin, async (req, res) => {
   try {
     const { status } = req.body || {};
@@ -623,6 +642,7 @@ router.patch('/admin/:id/status', requireAdmin, async (req, res) => {
     }
 
     const now = new Date();
+    const previous = renewal.status;
     renewal.status = status;
     renewal.reviewNote = note || undefined;
     renewal.reviewedBy = req.adminUser.email;
@@ -636,6 +656,7 @@ router.patch('/admin/:id/status', requireAdmin, async (req, res) => {
       changedAt: now,
     });
     await renewal.save();
+    await endIfNotRenewed(renewal, req.adminUser, now, previous);
     res.json({ renewal });
   } catch (err) {
     console.error('Renewal decision error:', err);

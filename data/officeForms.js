@@ -73,7 +73,11 @@ const OFFICE_FORMS = {
   },
   // Vicissitude: Editorial Board discounts follow the performance rating
   // (60% Coordinator and Layout Artist, 40% Editorial Board).
+  // No application since Nov 2026 (members only): Vicissitude adds its
+  // members each semester (POST /api/applications/direct-award).
   s8: {
+    award: { who: 'member', approver: 'Vicissitude Coordinator', note: 'Added by Vicissitude as a member of the Editorial Board or Staff.' },
+    documents: { by: 'member', board: ['Performance evaluation and duty hours record'], staff: ['Performance evaluation and duty hours record'] },
     // The lowest rating for each discount (the rest get 25%).
     numbers: { rating100: RATING(4.75), rating75: RATING(4.5), rating50: RATING(4.25) },
     answers: {
@@ -116,8 +120,11 @@ const OFFICE_FORMS = {
       onsiteTime: { type: 'time' },
     },
   },
-  // Heraldo Filipino: the Managing Director computes the points.
+  // Heraldo Filipino: the Managing Director computes the points. No
+  // application since Nov 2026 (members only): the office adds its staff.
   s12: {
+    award: { who: 'staff member', approver: 'Editor in Chief and Publication Adviser', note: 'Added by the Heraldo Filipino as a member of the Editorial Staff.' },
+    documents: Object.fromEntries([['by', 'position'], ...['junior', 'senior', 'section', 'associate', 'managing', 'chief'].map(r => [r, ['Scholarship points computation']])]),
     answers: {
       position: { type: 'choice', options: ['junior', 'senior', 'section', 'associate', 'managing', 'chief'] },
       publishedWorks: { type: 'number', min: 0, max: 500, step: 1 },

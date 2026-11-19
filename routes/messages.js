@@ -9,6 +9,8 @@ const { OFFICES, OFFICE_CODES, OFFICE_NAMES, CLERK_OFFICES } = require('../data/
 const { officeFilter } = require('../utils/officeScope');
 const { requireStudent, requireStudentOrAdmin } = require('../middleware/requireStudent');
 const Message = require('../models/Message');
+const AutoReply = require('../models/AutoReply');
+const { replyAfter, quickQuestions, askQuickQuestion, parseSettings, settingsView, inOfficeHours } = require('../utils/autoReplies');
 const MessageThread = require('../models/MessageThread');
 const Student = require('../models/Student');
 const Application = require('../models/Application');
@@ -191,6 +193,8 @@ function view(m) {
     applicationRef: m.applicationRef ?? null,
     readAt: m.readAt,
     unsentAt: m.unsentAt ?? null,
+    // An automatic reply (welcome, away, quick question), not a person's.
+    auto: m.auto ?? null,
     createdAt: m.createdAt,
   };
 }
@@ -325,6 +329,8 @@ router.post('/mine', requireStudent, withUpload, async (req, res) => {
     const student = await Student.findOne({ studentNumber: req.studentNumber }).select('name email').lean();
     const result = await createMessage(req, { studentNumber: req.studentNumber, inbox, from: 'student', authorEmail: student?.email, authorName: student?.name });
     if (result.error) return res.status(result.status).json({ error: result.error });
+    // The office's welcome or away reply, if one is due (utils/autoReplies.js).
+    const autoReplies = await replyAfter(inbox, req.studentNumber, result.message).catch(err => { console.error('Auto reply failed:', err); return []; });
     if (!result.alreadyWaiting) {
       const who = require('../utils/names').properName(student?.name) || req.studentNumber;
       const email = renderEmail({
@@ -342,10 +348,61 @@ router.post('/mine', requireStudent, withUpload, async (req, res) => {
           .catch(err => console.error('Office admin emails lookup failed:', err));
       }
     }
-    res.status(201).json({ message: view(result.message) });
+    res.status(201).json({ message: view(result.message), autoReplies: autoReplies.map(view) });
   } catch (err) {
     console.error('Send message error:', err);
     res.status(500).json({ error: 'Failed to send your message.' });
+  }
+});
+
+// Quick questions (automatic replies): the office's list, and asking one.
+//   GET  /api/messages/mine/quick-questions?office=     { questions: [{ _id, question }] }
+//   POST /api/messages/mine/quick-questions/:id         { office } → { messages: [question, answer] }
+router.get('/mine/quick-questions', requireStudent, async (req, res) => {
+  try {
+    const inbox = studentInbox(req);
+    if (!inbox) return res.status(400).json({ error: 'Unknown office.' });
+    res.json({ questions: await quickQuestions(inbox) });
+  } catch (err) {
+    console.error('Quick questions error:', err);
+    res.status(500).json({ error: 'Failed to load the quick questions.' });
+  }
+});
+
+router.post('/mine/quick-questions/:id', requireStudent, async (req, res) => {
+  try {
+    const inbox = studentInbox(req);
+    if (!inbox) return res.status(400).json({ error: 'Unknown office.' });
+    const student = await Student.findOne({ studentNumber: req.studentNumber }).select('studentNumber name email').lean();
+    const sent = await askQuickQuestion(inbox, student || { studentNumber: req.studentNumber }, req.params.id);
+    if (!sent) return res.status(404).json({ error: 'That question isn’t available any more.' });
+    res.status(201).json({ messages: sent.map(view) });
+  } catch (err) {
+    console.error('Quick question error:', err);
+    res.status(500).json({ error: 'Failed to send the question.' });
+  }
+});
+
+// The office's automatic replies (its own inbox).
+//   GET /api/messages/admin/auto-replies · PUT (same shape: { welcome, away, faqs })
+router.get('/admin/auto-replies', requireAdmin, async (req, res) => {
+  try {
+    res.json({ settings: settingsView(await AutoReply.findById(req.adminUser.office).lean()), inOfficeHours: inOfficeHours() });
+  } catch (err) {
+    console.error('Load auto replies error:', err);
+    res.status(500).json({ error: 'Failed to load the automatic replies.' });
+  }
+});
+
+router.put('/admin/auto-replies', requireAdmin, async (req, res) => {
+  try {
+    const { value, error } = parseSettings(req.body);
+    if (error) return res.status(400).json({ error });
+    const doc = await AutoReply.findByIdAndUpdate(req.adminUser.office, { $set: { ...value, updatedBy: req.adminUser.email } }, { upsert: true, returnDocument: 'after', runValidators: true }).lean();
+    res.json({ settings: settingsView(doc), inOfficeHours: inOfficeHours() });
+  } catch (err) {
+    console.error('Save auto replies error:', err);
+    res.status(500).json({ error: 'Failed to save the automatic replies.' });
   }
 });
 
@@ -542,13 +599,14 @@ router.get('/admin/unread', requireAdmin, async (req, res) => {
 
 // Students to start a conversation with, by name or student number. The
 // AdSO can write to anyone; another office to students who applied to it
-// or are already in its inbox.
+// or are already in its inbox. Without a search (q empty), the first 20 by
+// name, so New message shows students right away (panel, Nov 2026).
 router.get('/admin/students', requireAdmin, async (req, res) => {
   try {
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
-    if (q.length < 2) return res.json({ students: [] });
+    if (q.length === 1) return res.json({ students: [] });
     const safe = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const filter = { $or: [{ studentNumber: { $regex: `^${safe}` } }, { name: { $regex: safe, $options: 'i' } }] };
+    const filter = q ? { $or: [{ studentNumber: { $regex: `^${safe}` } }, { name: { $regex: safe, $options: 'i' } }] } : {};
     const inbox = req.adminUser.office;
     if (inbox !== ADSO) {
       const [applied, written] = await Promise.all([
@@ -557,7 +615,7 @@ router.get('/admin/students', requireAdmin, async (req, res) => {
       ]);
       filter.studentNumber = { $in: [...new Set([...applied, ...written])] };
     }
-    const students = await Student.find(filter).select('studentNumber name programCode college yearLevel').limit(10).lean();
+    const students = await Student.find(filter).select('studentNumber name programCode college yearLevel').sort(q ? {} : { name: 1 }).limit(q ? 10 : 20).lean();
     res.json({ students: students.map(({ _id, ...st }) => st) });
   } catch (err) {
     console.error('Message student search error:', err);

@@ -27,12 +27,13 @@ async function requireStudent(req, res, next) {
   }
 }
 
-// Scholars only: a student with at least one approved application. Used
-// for features non-scholars don't get (renewals, duty hours). Runs
+// Scholars only: a student with at least one approved application that
+// hasn't ended (graduated, stopped, declined or not renewed). Used for
+// features non-scholars don't get (renewals, duty hours). Runs
 // requireStudent first.
 const requireScholar = [requireStudent, async (req, res, next) => {
   try {
-    if (!(await Application.exists({ studentNumber: req.studentNumber, status: 'Approved' }))) {
+    if (!(await Application.exists({ studentNumber: req.studentNumber, status: 'Approved', endedAt: null }))) {
       return res.status(403).json({ error: 'This is only for scholars with an approved scholarship.' });
     }
     next();
@@ -42,16 +43,13 @@ const requireScholar = [requireStudent, async (req, res, next) => {
   }
 }];
 
-// SFAG scholars only (duty hours): approved for the SFAG, or renewed on it,
-// at any time — so a past grantee can still open their old logs. Runs
-// requireStudent first.
+// SFAG scholars only (duty hours): a current SFAG scholar. Once the SFAG
+// ends (not renewed, stopped, graduated, declined) duty hours go away
+// (panel, Nov 2026). Runs requireStudent first.
 const requireSfagScholar = [requireStudent, async (req, res, next) => {
   try {
-    const [approved, renewed] = await Promise.all([
-      Application.exists({ studentNumber: req.studentNumber, scholarshipId: SFAG_ID, status: 'Approved' }),
-      Renewal.exists({ studentNumber: req.studentNumber, scholarshipId: SFAG_ID, status: 'Renewed' }),
-    ]);
-    if (!approved && !renewed) {
+    const approved = await Application.exists({ studentNumber: req.studentNumber, scholarshipId: SFAG_ID, status: 'Approved', endedAt: null });
+    if (!approved) {
       return res.status(403).json({ error: 'Duty hours are only for Student Financial Aid Grant (SFAG) scholars.' });
     }
     next();

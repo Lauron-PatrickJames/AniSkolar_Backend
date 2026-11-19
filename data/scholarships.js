@@ -131,17 +131,18 @@ const SCHOLARSHIPS = [
   // and no renewals. It adds each one itself (POST
   // /api/applications/direct-award) with the coach's document.
   { id: 's7', defaultStatus: 'Closed', name: 'Athletic Scholarship', office: 'SDO', formType: 'standard', referenceCode: 'ATH', applicationMode: 'info', noRenewal: true, directAward: true },
-  // One semester at a time: members apply each term with that term's
-  // performance evaluation and duty hours record.
-  { id: 's8', defaultStatus: 'Closed', name: 'Vicissitude Scholarship Program', office: 'VICISSITUDE', formType: 'standard', referenceCode: 'VIC', noRenewal: true, oneSemester: true },
+  // Members only (Nov 2026): no application. Vicissitude adds its members
+  // each semester with their evaluation and duty hours record.
+  { id: 's8', defaultStatus: 'Closed', name: 'Vicissitude Scholarship Program', office: 'VICISSITUDE', formType: 'standard', referenceCode: 'VIC', applicationMode: 'info', directAward: true, noRenewal: true, oneSemester: true },
   // s9 (Performing Arts Group) was removed: PAG declined to partner with AniSkolar.
   // The ROTC Office adds its officers itself each semester, at their
   // current rank (the rank sets the amount): no application, no renewals.
   { id: 's10', defaultStatus: 'Closed', name: '267th NROTC Scholarship', office: 'ROTC', formType: 'standard', referenceCode: 'ROTC', applicationMode: 'info', directAward: true, noRenewal: true, oneSemester: true },
   { id: 's11', defaultStatus: 'Closed', name: 'USG Student Financial Aid Grant', office: 'USG', formType: 'standard', referenceCode: 'USGF', noRenewal: true, oneSemester: true },
+  // Members only (Nov 2026): no application; the office adds its staff.
   // No renewals: staff keep it while they're on the Editorial Staff; the
   // office marks them Stopped when they leave (or Graduated).
-  { id: 's12', defaultStatus: 'Closed', name: 'Heraldo Filipino Scholarship', office: 'HERALDO', formType: 'standard', referenceCode: 'HF', noRenewal: true },
+  { id: 's12', defaultStatus: 'Closed', name: 'Heraldo Filipino Scholarship', office: 'HERALDO', formType: 'standard', referenceCode: 'HF', applicationMode: 'info', directAward: true, noRenewal: true },
   // CBAASG Ordinance No. 01, s. 2021–2022: for CBAA students only (the
   // office can change the programs; its saved rules then apply instead).
   { id: 's13', defaultStatus: 'Closed', name: 'CBAASG Achie Scholarship', office: 'CBAASG', formType: 'standard', referenceCode: 'ACHIE', programs: CBAA_PROGRAMS },

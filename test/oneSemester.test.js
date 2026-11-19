@@ -12,8 +12,9 @@ const { findHeldScholarships, findHeldScholarshipsByStudent } = require('../util
 const { SCHOLARSHIPS } = require('../data/scholarships');
 
 const ONE_SEMESTER = ['s8', 's10', 's11', 's15', 's16', 's17'];
-// The ones students apply for (the ROTC's officers are added by the office).
-const APPLIED_FOR = ['s8', 's11', 's15', 's16', 's17'];
+// The ones students apply for (ROTC and Vicissitude add their members).
+const APPLIED_FOR = ['s11', 's15', 's16', 's17'];
+
 // Manila midnight is 16:00 UTC the day before.
 const at = iso => new Date(iso);
 
