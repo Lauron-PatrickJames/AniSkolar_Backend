@@ -23,6 +23,19 @@ const OLD_APPROVED_BODY = 'Congratulations, {firstName}! Your {scholarship} appl
 const APPROVED_TITLE = 'Approved: you’re a scholar';
 const APPROVED_BODY = 'Congratulations, {firstName}! The office has reviewed and approved your {scholarship} application ({referenceCode}). You are now a {scholarship} scholar. Next, watch your school email and AniSkolar announcements for the orientation schedule.';
 
+// The quick replies in a chat (panel, Nov 2026: more useful defaults).
+// Offices that still have the first two starters, unchanged, get these.
+const OLD_MESSAGE_BODIES = [
+  'Hi {firstName}, we received your document. We\'ll update you here once it has been checked.',
+  'Hi {firstName}, please visit our office on a weekday, 8:00 AM–5:00 PM, and bring [what to bring].',
+];
+const MESSAGE_STARTERS = [
+  { context: 'message', title: 'We’re checking it', body: 'Hi {firstName}, thank you for your message. We’ve received it and are checking it now. We’ll update you here within 1–2 working days.' },
+  { context: 'message', title: 'See My Applications', body: 'Hi {firstName}, you can see your application’s status and our notes in AniSkolar under My Applications. You’ll also get a notification when it changes.' },
+  { context: 'message', title: 'Send a clearer copy', body: 'Hi {firstName}, the file you sent is hard to read. Please send a clear photo or scan of the whole page, and we’ll check it right away.' },
+  { context: 'message', title: 'Please visit the office', body: 'Hi {firstName}, please visit the Admissions and Scholarship Office on a weekday, 8:00 AM–5:00 PM, and bring [what to bring].' },
+];
+
 const STARTERS = [
   { context: 'application', decision: 'Needs Revision', title: 'Blurry or unreadable document', body: 'Hi {firstName}, one of your documents for the {scholarship} ({referenceCode}) is blurry or cut off, so we can\'t read it: [which document]. Please upload a clear photo or scan of the whole page and resubmit.' },
   { context: 'application', decision: 'Needs Revision', title: 'Missing document', body: 'Hi {firstName}, your {scholarship} application ({referenceCode}) is missing a required document: [which document]. Please upload it and resubmit.' },
@@ -35,8 +48,7 @@ const STARTERS = [
   { context: 'renewal', decision: 'Not Renewed', title: 'GPA below the minimum', body: 'Hi {firstName}, we\'re unable to renew your {scholarship} for the {term} because your GPA is below the required minimum. If you have questions, message the office in AniSkolar.' },
   { context: 'renewal', decision: 'Not Renewed', title: 'Duty hours not completed', body: 'Hi {firstName}, we\'re unable to renew your {scholarship} for the {term} because last semester\'s required duty hours weren\'t completed. If you have questions, message the office in AniSkolar.' },
   { context: 'renewal', decision: 'Renewed', title: 'Renewed', body: 'Congratulations, {firstName}! Your {scholarship} has been renewed for the {term}. Keep it up!' },
-  { context: 'message', title: 'Document received', body: 'Hi {firstName}, we received your document. We\'ll update you here once it has been checked.' },
-  { context: 'message', title: 'Please visit the office', body: 'Hi {firstName}, please visit our office on a weekday, 8:00 AM–5:00 PM, and bring [what to bring].' },
+  ...MESSAGE_STARTERS,
 ];
 
 const officeOf = req => req.adminUser.office;
@@ -65,6 +77,13 @@ router.get('/', requireAdmin, async (req, res) => {
       await ReplyTemplate.insertMany(STARTERS.map(t => ({ ...t, office, starter: true, createdBy: 'AniSkolar' })));
     }
     await ReplyTemplate.updateMany({ office, starter: true, body: OLD_APPROVED_BODY }, { $set: { title: APPROVED_TITLE, body: APPROVED_BODY } });
+    // The old chat starters, unchanged, give way to the new ones.
+    const old = await ReplyTemplate.deleteMany({ office, starter: true, context: 'message', body: { $in: OLD_MESSAGE_BODIES }, deletedAt: null });
+    if (old.deletedCount) {
+      const have = new Set((await ReplyTemplate.find({ office, context: 'message', deletedAt: null }).select('title').lean()).map(t => t.title));
+      const add = MESSAGE_STARTERS.filter(t => !have.has(t.title)).map(t => ({ ...t, office, starter: true, createdBy: 'AniSkolar' }));
+      if (add.length) await ReplyTemplate.insertMany(add);
+    }
     const list = await ReplyTemplate.find({ office, deletedAt: null }).sort({ usedCount: -1, title: 1 }).lean();
     res.json({ templates: list.map(view) });
   } catch (err) {
