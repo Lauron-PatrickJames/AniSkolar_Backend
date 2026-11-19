@@ -29,6 +29,8 @@ const profileStorage = multer.diskStorage({
 });
 
 const profileUpload = multer({
+  // File names as the browser sends them (UTF-8), so "–" or "ñ" survive.
+  defParamCharset: 'utf8',
   storage: profileStorage,
   limits: { fileSize: MAX_FILE_SIZE },
   fileFilter,
@@ -41,6 +43,8 @@ const profileUpload = multer({
 // (This is *why* they weren't showing up in Atlas before — diskStorage
 // never sends the bytes to Mongo at all, only the route's own DB writes did.)
 const applicationUpload = multer({
+  // File names as the browser sends them (UTF-8), so "–" or "ñ" survive.
+  defParamCharset: 'utf8',
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_SIZE }, // per file
   fileFilter,
@@ -67,6 +71,8 @@ const APPLICATION_DOCUMENT_FIELDS = [
 const MAX_SHEET_FILES = 10;
 const SHEET_TYPES = { 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'], 'application/pdf': ['.pdf'] };
 const attendanceSheetUpload = multer({
+  // File names as the browser sends them (UTF-8), so "–" or "ñ" survive.
+  defParamCharset: 'utf8',
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_SIZE, files: MAX_SHEET_FILES },
   fileFilter: (req, file, cb) => {
@@ -84,6 +90,8 @@ const attendanceSheetUpload = multer({
 const MAX_ANNOUNCEMENT_IMAGES = 10;
 const ANNOUNCEMENT_IMAGE_TYPES = { 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'] };
 const announcementImageUpload = multer({
+  // File names as the browser sends them (UTF-8), so "–" or "ñ" survive.
+  defParamCharset: 'utf8',
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_SIZE, files: MAX_ANNOUNCEMENT_IMAGES },
   fileFilter: (req, file, cb) => {

@@ -109,6 +109,8 @@ const MAX_BODY = 4000;
 const ALLOWED = { 'image/jpeg': [0xff, 0xd8, 0xff], 'image/png': [0x89, 0x50, 0x4e, 0x47], 'application/pdf': [0x25, 0x50, 0x44, 0x46] };
 
 const upload = multer({
+  // File names as the browser sends them (UTF-8), so "–" or "ñ" survive.
+  defParamCharset: 'utf8',
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_SIZE, files: MAX_FILES },
   fileFilter: (req, file, cb) => (ALLOWED[file.mimetype] ? cb(null, true) : cb(new Error('Attach JPG, PNG or PDF files only.'))),
