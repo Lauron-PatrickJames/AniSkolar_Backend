@@ -347,6 +347,10 @@ router.get('/admin', requireAdso, async (req, res) => {
       scholars,
       // Offices used in any term, for suggestions when assigning.
       offices: offices.filter(Boolean).sort((a, b) => a.localeCompare(b)),
+      // Office heads on leave now, by office name (normalized: lowercase,
+      // single spaces): { returnsOn }. The list marks their offices.
+      headsOnLeave: Object.fromEntries([...(await require('../utils/offices').officeLeaves())]
+        .filter(([, l]) => l.onLeave).map(([office, l]) => [office, { returnsOn: l.returnsOn }])),
     });
   } catch (err) {
     console.error('Load duty hours (admin) error:', err);

@@ -213,3 +213,16 @@ describe('AdSO-added scholars follow the approval chain', () => {
     assert.equal(res.body.awaiting, undefined);
   });
 });
+
+describe('typed quick questions', () => {
+  const { matchFaq } = require('../utils/autoReplies');
+  const faqs = [{ question: 'How do I renew my scholarship?', answer: 'renew' }, { question: 'What are your office hours?', answer: 'hours' }];
+  test('nearly the same question gets its answer', () => {
+    assert.equal(matchFaq('how do i renew my scholarship po?', faqs)?.answer, 'renew');
+    assert.equal(matchFaq('Office hours?', faqs)?.answer, 'hours');
+  });
+  test('greetings and other messages get none', () => {
+    assert.equal(matchFaq('hello', faqs), null);
+    assert.equal(matchFaq('I have a problem with my duty hours log yesterday', faqs), null);
+  });
+});

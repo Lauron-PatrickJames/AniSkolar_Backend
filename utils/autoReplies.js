@@ -57,11 +57,36 @@ const autoMessage = (inbox, studentNumber, kind, body, now) => Message.create({
   createdAt: new Date(now.getTime() + 1), updatedAt: new Date(now.getTime() + 1),
 });
 
-// After a student's message `sent` in `inbox`: the welcome or away reply,
-// if one is due. Returns the messages created (none, or one).
+// A typed message that asks one of the quick questions (panel, Nov 2026):
+// the words that matter (not "the", "how", "po"…) mostly the same as the
+// question's. Short messages only, so a long message about something else
+// never gets a canned answer. Returns the matching FAQ or null.
+const STOP_WORDS = new Set('a an the is are am i my me you your we our it its to of for in on at and or do does did can could will would how what when where who which why there this that be with po ba ko ang ng sa mga na hello hi good morning afternoon evening please pls thanks thank'.split(' '));
+const words = text => String(text || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(w => w.length > 1 && !STOP_WORDS.has(w));
+function matchFaq(body, faqs) {
+  const asked = words(body);
+  if (!asked.length || asked.length > 15) return null;
+  let best = null;
+  for (const f of faqs || []) {
+    const q = new Set(words(f.question));
+    if (!q.size) continue;
+    const shared = asked.filter(w => q.has(w)).length;
+    // Most of the question's words, and most of what was asked.
+    const score = Math.min(shared / q.size, shared / asked.length);
+    if (score >= 0.6 && (!best || score > best.score)) best = { faq: f, score };
+  }
+  return best?.faq ?? null;
+}
+
+// After a student's message `sent` in `inbox`: the answer to a quick
+// question they typed, or else the welcome or away reply, if one is due.
+// Returns the messages created (none, or one).
 async function replyAfter(inbox, studentNumber, sent, now = new Date()) {
   const settings = await AutoReply.findById(inbox).lean();
-  if (!settings || (!settings.welcome?.enabled && !settings.away?.enabled)) return [];
+  if (!settings) return [];
+  const faq = matchFaq(sent.body, settings.faqs);
+  if (faq) return [await autoMessage(inbox, studentNumber, 'faq', faq.answer, now)];
+  if (!settings.welcome?.enabled && !settings.away?.enabled) return [];
   const thread = { studentNumber, ...inboxOf(inbox), _id: { $ne: sent._id } };
   if (settings.away?.enabled && (settings.away.mode === 'always' || !inOfficeHours(now))) {
     const recent = await Message.exists({ ...thread, auto: 'away', createdAt: { $gt: new Date(now.getTime() - AWAY_EVERY_MS) } });
@@ -94,4 +119,4 @@ async function askQuickQuestion(inbox, student, faqId, now = new Date()) {
   return [question, answer];
 }
 
-module.exports = { replyAfter, quickQuestions, askQuickQuestion, parseSettings, settingsView, inOfficeHours };
+module.exports = { matchFaq, replyAfter, quickQuestions, askQuickQuestion, parseSettings, settingsView, inOfficeHours };
