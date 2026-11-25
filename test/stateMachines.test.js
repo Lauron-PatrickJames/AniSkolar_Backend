@@ -81,6 +81,7 @@ describe('duty hours', () => {
     users.s1 = clerkUser('scholar@dlsud.edu.ph');
     Student.findOne = () => query({ studentNumber: '202300001' });
     Student.find = () => query([]);
+    Student.exists = async () => null;                         // not allowed any date
     Application.exists = async () => true;
     Application.find = () => query([sfagApproved]);
     Renewal.exists = async () => false;
@@ -92,6 +93,21 @@ describe('duty hours', () => {
   });
 
   const put = entries => call(a, 'PUT', '/api/duty-hours/mine', { user: 's1', body: { ...TERM, entries } });
+
+  test('an account allowed any date (dutyAnyDate) can log a past duty', async () => {
+    Student.exists = async filter => (filter.dutyAnyDate ? { _id: 'x' } : null);
+    DutyLog.findOne = () => query({ officeAssigned: 'Registrar', entries: [] });
+    const res = await put([{ date: '2026-10-05', timeIn: '13:00', timeOut: '15:00' }]);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.anyDate, true);
+    assert.equal(update.$set.entries[0].date, '2026-10-05');
+  });
+
+  test('other scholars still can’t log a past duty', async () => {
+    DutyLog.findOne = () => query({ officeAssigned: 'Registrar', entries: [] });
+    const res = await put([{ date: '2026-10-05', timeIn: '13:00', timeOut: '15:00' }]);
+    assert.equal(res.status, 400);
+  });
 
   test('a scholar who declined the SFAG can’t log duties', async () => {
     Application.find = () => query([{ ...sfagApproved, endedAt: new Date() }]);

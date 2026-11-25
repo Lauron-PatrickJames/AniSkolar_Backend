@@ -184,6 +184,11 @@ async function headLeaveFor(office) {
   return leave?.onLeave ? { since: leave.since, returnsOn: leave.returnsOn } : null;
 }
 
+// Single accounts allowed to log duties on any date (set by hand).
+async function dutyAnyDate(studentNumber) {
+  return !!(await Student.exists({ studentNumber, dutyAnyDate: true }));
+}
+
 router.get('/mine', requireSfagScholar, async (req, res) => {
   try {
     const { value: term, error } = parseTerm(req.query);
@@ -204,6 +209,8 @@ router.get('/mine', requireSfagScholar, async (req, res) => {
       // The office head is on leave: duties wait for their return instead
       // of being removed after 48 hours.
       headOnLeave: await headLeaveFor(log?.officeAssigned),
+      // This account may log duties on any date (Student.dutyAnyDate).
+      anyDate: await dutyAnyDate(req.studentNumber),
     });
   } catch (err) {
     console.error('Load duty log error:', err);
@@ -248,7 +255,9 @@ router.put('/mine', requireCurrentSfagScholar, async (req, res) => {
     const fixableDates = (existing?.entries || [])
       .filter(e => e.status === 'flagged' && !keptKeys.has(keyOf(e)))
       .map(e => e.date);
-    for (const { e, old } of matched) {
+    // Accounts allowed any date (Student.dutyAnyDate) skip this check.
+    const anyDate = await dutyAnyDate(req.studentNumber);
+    for (const { e, old } of anyDate ? [] : matched) {
       if (old && keyOf(old) === keyOf(e)) continue;
       if (old) {
         if (e.date === today || (old.status === 'flagged' && e.date === old.date)) continue;
@@ -283,7 +292,7 @@ router.put('/mine', requireCurrentSfagScholar, async (req, res) => {
       update,
       { upsert: true, returnDocument: 'after', runValidators: true, setDefaultsOnInsert: true }
     ).lean();
-    res.json(scholarLogView(saved, todayInManila(), rule, await termEvents(term), await officesWithHeads()));
+    res.json({ ...scholarLogView(saved, todayInManila(), rule, await termEvents(term), await officesWithHeads()), anyDate });
   } catch (err) {
     console.error('Save duty log error:', err);
     res.status(500).json({ error: 'Failed to save your duty hours.' });
