@@ -37,7 +37,8 @@ const studentSchema = new mongoose.Schema({
     // Clerk itself has no concept of.
     clerkId: { type: String, required: true, unique: true, index: true },
     // Set by hand in the database for single accounts only: the scholar may
-    // log or change duties on any date, not just today (routes/dutyHours.js).
+    // log or change duties on any date, not just today, and enters their own
+    // required hours instead of the AdSO's (routes/dutyHours.js).
     // Never set from a request.
     dutyAnyDate: Boolean,
     // Full display name, composed from the parts below.

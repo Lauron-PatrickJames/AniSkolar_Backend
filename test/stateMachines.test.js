@@ -103,6 +103,17 @@ describe('duty hours', () => {
     assert.equal(update.$set.entries[0].date, '2026-10-05');
   });
 
+  test('an account allowed any date keeps its own required hours', async () => {
+    Student.exists = async filter => (filter.dutyAnyDate ? { _id: 'x' } : null);
+    Student.find = () => query([{ studentNumber: '202300001', yearLevel: '1st Year', dutyAnyDate: true }]);
+    Application.find = () => query([{ ...sfagApproved, studentNumber: '202300001', sfagPercentage: 25 }]);
+    DutyLog.findOne = () => query({ officeAssigned: 'Registrar', entries: [] });
+    const res = await put([]);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.rule.percentage, 25);
+    assert.equal(res.body.rule.requiredHours, null);
+  });
+
   test('other scholars still can’t log a past duty', async () => {
     DutyLog.findOne = () => query({ officeAssigned: 'Registrar', entries: [] });
     const res = await put([{ date: '2026-10-05', timeIn: '13:00', timeOut: '15:00' }]);

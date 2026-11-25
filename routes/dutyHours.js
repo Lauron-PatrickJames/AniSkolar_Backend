@@ -91,15 +91,17 @@ async function dutyRules(studentNumbers) {
   const [apps, students, settings] = await Promise.all([
     Application.find({ studentNumber: { $in: studentNumbers }, scholarshipId: SFAG_ID, status: 'Approved', sfagPercentage: { $exists: true } })
       .select('studentNumber sfagPercentage reviewedAt createdAt').sort({ reviewedAt: -1, createdAt: -1 }).lean(),
-    Student.find({ studentNumber: { $in: studentNumbers } }).select('studentNumber yearLevel').lean(),
+    Student.find({ studentNumber: { $in: studentNumbers } }).select('studentNumber yearLevel dutyAnyDate').lean(),
     DutySetting.current(),
   ]);
   const yearLevelOf = new Map(students.map(s => [s.studentNumber, s.yearLevel]));
+  // Accounts set free by hand (Student.dutyAnyDate) enter their own hours.
+  const ownHours = new Set(students.filter(s => s.dutyAnyDate).map(s => s.studentNumber));
   const rules = new Map();
   for (const a of apps) {
     if (rules.has(a.studentNumber)) continue;
     const yearGroup = DutySetting.yearGroupOf(yearLevelOf.get(a.studentNumber));
-    const requiredHours = yearGroup ? settings.hoursByGroup[yearGroup][a.sfagPercentage] ?? null : null;
+    const requiredHours = ownHours.has(a.studentNumber) ? null : yearGroup ? settings.hoursByGroup[yearGroup][a.sfagPercentage] ?? null : null;
     rules.set(a.studentNumber, { percentage: a.sfagPercentage, yearGroup, requiredHours });
   }
   return rules;
